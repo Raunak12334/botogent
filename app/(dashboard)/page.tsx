@@ -1,5 +1,4 @@
 import { auth } from "@clerk/nextjs/server"
-import { UserButton } from "@clerk/nextjs"
 import { Plus } from "lucide-react"
 import { nanoid } from "nanoid"
 import { eq, desc } from "drizzle-orm"
@@ -36,9 +35,6 @@ export default async function Page() {
 
   return (
     <main className="relative flex min-h-screen w-full flex-col items-center justify-center bg-background p-4 text-foreground">
-      <div className="absolute top-4 right-4">
-        <UserButton />
-      </div>
 
       {userBots.length === 0 ? (
         <Empty className="max-w-md flex-initial border-none p-0">
