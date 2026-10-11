@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -77,6 +78,7 @@ export function BotDialog({
   const [internalOpen, setInternalOpen] = React.useState(false);
   const isControlled = openProp !== undefined;
   const open = isControlled ? openProp : internalOpen;
+  const router = useRouter();
 
   const handleOpenChange = React.useCallback(
     (nextOpen: boolean) => {
@@ -147,7 +149,12 @@ export function BotDialog({
           instructions: "",
           avatar: nanoid(),
         });
-        onSuccess?.(result.data);
+        if (onSuccess) {
+          onSuccess(result.data);
+        } else if (result.data.chat?.id) {
+          router.refresh();
+          router.push(`/chats/${result.data.chat.id}`);
+        }
       } else {
         setServerError(result.error);
       }

@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { useRouter } from "next/navigation"
+import Link from "next/link"
+import { useParams, usePathname, useRouter } from "next/navigation"
 import { UserButton } from "@clerk/nextjs"
 import { Plus, Search, Users } from "lucide-react"
 import { formatDistanceToNowStrict } from "date-fns"
@@ -61,9 +62,33 @@ export interface AppSidebarProps
 
 export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
   const router = useRouter()
-  const { state, isMobile } = useSidebar()
+  const pathname = usePathname()
+  const params = useParams()
+  const { state, isMobile, setOpenMobile } = useSidebar()
   const [botDialogOpen, setBotDialogOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
+
+  const activeChatId =
+    (typeof params?.chatId === "string" ? params.chatId : null) ||
+    (pathname?.startsWith("/chats/")
+      ? pathname.split("/chats/")[1]?.split("/")[0]
+      : null)
+
+  const activeChatRef = React.useRef<HTMLButtonElement | null>(null)
+
+  React.useEffect(() => {
+    if (activeChatId && activeChatRef.current) {
+      activeChatRef.current.focus()
+      activeChatRef.current.scrollIntoView({ block: "nearest" })
+    }
+  }, [activeChatId])
+
+  const handleChatSelect = (chatId: string) => {
+    if (isMobile) {
+      setOpenMobile(false)
+    }
+    router.push(`/chats/${chatId}`)
+  }
 
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -164,12 +189,21 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
                     chat.lastMessageAt || chat.createdAt
                   )
 
+                  const isActive = Boolean(
+                    activeChatId && chat.id === activeChatId
+                  )
+
                   return (
                     <SidebarMenuItem key={chat.id}>
                       <SidebarMenuButton
+                        ref={isActive ? activeChatRef : undefined}
                         size="lg"
-                        className="h-auto py-2 px-2 gap-3 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:justify-center"
+                        className="h-auto py-2 px-2 gap-3 cursor-pointer group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:justify-center"
                         tooltip={name}
+                        isActive={isActive}
+                        data-active={isActive ? "true" : undefined}
+                        aria-current={isActive ? "page" : undefined}
+                        onClick={() => handleChatSelect(chat.id)}
                       >
                         <ChatAvatar
                           seed={avatarSeed}
@@ -259,6 +293,7 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
                   value={`${name} ${chat.lastMessagePreview || ""}`}
                   onSelect={() => {
                     setSearchOpen(false)
+                    handleChatSelect(chat.id)
                   }}
                   className="cursor-pointer gap-3 py-2"
                 >
@@ -294,8 +329,11 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
       <BotDialog
         open={botDialogOpen}
         onOpenChange={setBotDialogOpen}
-        onSuccess={() => {
+        onSuccess={(data) => {
           router.refresh()
+          if (data?.chat?.id) {
+            handleChatSelect(data.chat.id)
+          }
         }}
       />
     </>
