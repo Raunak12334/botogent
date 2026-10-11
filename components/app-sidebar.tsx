@@ -35,7 +35,14 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
+  SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import type { UserChat } from "@/queries/bots"
 
 function formatChatTime(date: Date | string | null | undefined): string {
@@ -54,6 +61,7 @@ export interface AppSidebarProps
 
 export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
   const router = useRouter()
+  const { state, isMobile } = useSidebar()
   const [botDialogOpen, setBotDialogOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
 
@@ -71,22 +79,35 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
 
   return (
     <>
-      <Sidebar {...props}>
+      <Sidebar collapsible="icon" {...props}>
         <SidebarHeader>
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-end group-data-[collapsible=icon]:justify-center">
             <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8"
-                  >
-                    <Plus className="size-4" />
-                    <span className="sr-only">Add</span>
-                  </Button>
-                }
-              />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 group-data-[collapsible=icon]:size-8"
+                        >
+                          <Plus className="size-4" />
+                          <span className="sr-only">Add</span>
+                        </Button>
+                      }
+                    />
+                  }
+                />
+                <TooltipContent
+                  side="right"
+                  align="center"
+                  hidden={state !== "collapsed" || isMobile}
+                >
+                  Create new bot or group
+                </TooltipContent>
+              </Tooltip>
               <DropdownMenuContent align="end" className="w-48">
                 <DropdownMenuGroup>
                   <DropdownMenuItem
@@ -105,17 +126,30 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
             </DropdownMenu>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setSearchOpen(true)}
-            className="h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:disabled:bg-input/80 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 flex items-center gap-2 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground cursor-pointer group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:justify-center"
-          >
-            <Search className="size-4 shrink-0 text-muted-foreground" />
-            <span className="truncate text-sm text-muted-foreground group-data-[collapsible=icon]:hidden">
-              Search
-            </span>
-            <Kbd className="ml-auto group-data-[collapsible=icon]:hidden">⌘K</Kbd>
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={() => setSearchOpen(true)}
+                  className="h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:disabled:bg-input/80 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 flex items-center gap-2 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground cursor-pointer group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-transparent"
+                >
+                  <Search className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate text-sm text-muted-foreground group-data-[collapsible=icon]:hidden">
+                    Search
+                  </span>
+                  <Kbd className="ml-auto group-data-[collapsible=icon]:hidden">⌘K</Kbd>
+                </button>
+              }
+            />
+            <TooltipContent
+              side="right"
+              align="center"
+              hidden={state !== "collapsed" || isMobile}
+            >
+              Search chats (⌘K)
+            </TooltipContent>
+          </Tooltip>
         </SidebarHeader>
 
         <SidebarContent>
@@ -134,7 +168,8 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
                     <SidebarMenuItem key={chat.id}>
                       <SidebarMenuButton
                         size="lg"
-                        className="h-auto py-2 px-2 gap-3"
+                        className="h-auto py-2 px-2 gap-3 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:justify-center"
+                        tooltip={name}
                       >
                         <ChatAvatar
                           seed={avatarSeed}
@@ -173,17 +208,19 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
               <SidebarMenuButton
                 size="lg"
                 render={<div />}
-                className="h-auto p-0 hover:bg-transparent"
+                className="h-auto p-0 hover:bg-transparent group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:justify-center"
               >
                 <UserButton
                   showName
                   appearance={{
                     elements: {
-                      rootBox: "w-full",
+                      rootBox:
+                        "w-full group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center",
                       userButtonTrigger:
-                        "flex w-full items-center gap-2 rounded-md p-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring outline-hidden",
-                      userButtonBox: "flex w-full items-center gap-2 flex-row",
-                      userButtonAvatarBox: "size-8 shrink-0 rounded-lg",
+                        "flex w-full items-center gap-2 rounded-md p-2 text-left text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring outline-hidden group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0",
+                      userButtonBox:
+                        "flex w-full items-center gap-2 flex-row group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0",
+                      userButtonAvatarBox: "size-8 shrink-0 rounded-full",
                       userButtonOuterIdentifier:
                         "truncate text-sm font-medium text-sidebar-foreground group-data-[collapsible=icon]:hidden",
                       userButtonPopoverCard:
@@ -195,6 +232,7 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
+        <SidebarRail />
       </Sidebar>
 
       <CommandDialog
