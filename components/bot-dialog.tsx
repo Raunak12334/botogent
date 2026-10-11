@@ -21,7 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { ChatAvatar } from "@/components/chat-avatar";
 import { DynamicButton } from "@/components/DynamicButton";
-import { createBot } from "@/actions/bot";
+import { createBot, type CreateBotData } from "@/actions/bot";
 import type { Bot } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
 
@@ -65,7 +65,7 @@ export interface BotDialogProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   trigger?: React.ReactElement;
-  onSuccess?: (bot: Bot) => void;
+  onSuccess?: (data: CreateBotData) => void;
 }
 
 export function BotDialog({

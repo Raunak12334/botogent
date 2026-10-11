@@ -3,7 +3,17 @@
 import { auth } from '@clerk/nextjs/server';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/db';
-import { bots, insertBotSchema, type Bot } from '@/lib/db/schema';
+import {
+  bots,
+  chats,
+  chatMembers,
+  insertBotSchema,
+  insertChatSchema,
+  insertChatMemberSchema,
+  type Bot,
+  type Chat,
+  type ChatMember,
+} from '@/lib/db/schema';
 import { nanoid } from 'nanoid';
 
 export type CreateBotInput = {
@@ -14,8 +24,14 @@ export type CreateBotInput = {
   sandboxId?: string | null;
 };
 
+export type CreateBotData = {
+  bot: Bot;
+  chat: Chat;
+  member: ChatMember;
+};
+
 export type CreateBotResult =
-  | { success: true; data: Bot }
+  | { success: true; data: CreateBotData }
   | { success: false; error: string };
 
 export async function createBot(input: CreateBotInput): Promise<CreateBotResult> {
@@ -29,19 +45,48 @@ export async function createBot(input: CreateBotInput): Promise<CreateBotResult>
   }
 
   try {
-    const validated = insertBotSchema.parse({
+    const botId = nanoid();
+    const chatId = nanoid();
+
+    const validatedBot = insertBotSchema.parse({
       ...input,
+      id: botId,
       userId,
       avatar: input.avatar || nanoid(),
     });
 
-    const [newBot] = await db.insert(bots).values(validated).returning();
+    const validatedChat = insertChatSchema.parse({
+      id: chatId,
+      userId,
+      kind: 'direct',
+      name: null,
+      lastMessagePreview: null,
+    });
+
+    const validatedMember = insertChatMemberSchema.parse({
+      chatId,
+      botId,
+    });
+
+    const [botResults, chatResults, memberResults] = await db.batch([
+      db.insert(bots).values(validatedBot).returning(),
+      db.insert(chats).values(validatedChat).returning(),
+      db.insert(chatMembers).values(validatedMember).returning(),
+    ]);
+
+    const newBot = botResults[0];
+    const newChat = chatResults[0];
+    const newMember = memberResults[0];
 
     revalidatePath('/');
 
     return {
       success: true,
-      data: newBot,
+      data: {
+        bot: newBot,
+        chat: newChat,
+        member: newMember,
+      },
     };
   } catch (error) {
     console.error('Error creating bot:', error);
@@ -51,3 +96,4 @@ export async function createBot(input: CreateBotInput): Promise<CreateBotResult>
     };
   }
 }
+
