@@ -60,3 +60,24 @@ thing:
 Only JavaScript and the HTTP API have a pre-10 form. The other six cores were
 released in 2026 and never had one, so any older-looking PHP, Python, Rust, Go,
 Dart or C# API attributed to DiceBear is invented rather than outdated.
+
+# Forms & Server Actions
+
+- **Schema Definition**:
+  - Derive Zod schemas directly from Drizzle tables using `drizzle-zod` (`createInsertSchema`, `createSelectSchema`) in `lib/db/schema.ts`.
+  - Refine constraints (`.min()`, `.max()`, etc.) directly in schema factories.
+  - Derive TypeScript types using `z.infer<typeof schema>`.
+- **Client Form Composition**:
+  - Compose client forms using `react-hook-form` paired with `@hookform/resolvers/zod`.
+  - Use project UI primitives (`components/ui/*`) for consistent styling.
+  - When wrapping dialog triggers with Base UI (`@base-ui/react`), `DialogTrigger` expects a `React.ReactElement` for the `render` prop (type `trigger?: React.ReactElement`). Avoid passing `React.ReactNode` directly to `render`.
+  - Design dialog components to support both controlled (`open`, `onOpenChange`) and uncontrolled (`trigger` element) usage.
+  - Implement quick template pills and randomized/shuffle controls by updating form fields via `form.setValue(field, value, { shouldValidate: true })`.
+  - Handle async submission states gracefully using `isSubmitting` and dynamic button transitions (e.g., `DynamicButton`).
+  - Clear errors and reset form values on successful submission or dialog dismissal.
+- **Server Actions (`actions/*.ts`)**:
+  - Mark action files with `'use server'`.
+  - Resolve and verify authentication on the server using Clerk's `await auth()` from `@clerk/nextjs/server`. Never accept or trust a client-supplied `userId`.
+  - Parse and validate payloads with the `insertBotSchema` on the server before database operations.
+  - Trigger Next.js cache revalidation with `revalidatePath(...)` after mutations.
+  - Return typed result objects (e.g. `{ success: true, data } | { success: false, error }`) instead of throwing uncaught exceptions to the client.
