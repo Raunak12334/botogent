@@ -81,3 +81,9 @@ Dart or C# API attributed to DiceBear is invented rather than outdated.
   - Parse and validate payloads with the `insertBotSchema` on the server before database operations.
   - Trigger Next.js cache revalidation with `revalidatePath(...)` after mutations.
   - Return typed result objects (e.g. `{ success: true, data } | { success: false, error }`) instead of throwing uncaught exceptions to the client.
+
+<!-- TRIGGER.DEV SKILLS START -->
+## Trigger.dev agent skills
+
+This project has Trigger.dev agent skills installed in `.agents/skills/`. Before writing or changing Trigger.dev code (background tasks, scheduled tasks, realtime, or chat.agent AI agents), load the most relevant skill: `trigger-authoring-chat-agent`.
+<!-- TRIGGER.DEV SKILLS END -->

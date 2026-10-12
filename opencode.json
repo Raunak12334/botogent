@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "trigger": {
+      "command": [
+        "npx",
+        "trigger.dev@4.7.3",
+        "mcp"
+      ],
+      "enabled": true,
+      "type": "local"
+    }
+  }
+}
