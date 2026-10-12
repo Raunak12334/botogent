@@ -2,7 +2,11 @@
 
 import * as React from "react"
 import { useChat } from "@ai-sdk/react"
-import { DefaultChatTransport } from "ai"
+import type { UIMessage } from "ai"
+import {
+  useTriggerChatTransport,
+  useLoadTranscript,
+} from "@trigger.dev/sdk/chat/react"
 import {
   Conversation,
   ConversationContent,
@@ -28,6 +32,12 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { ChatAvatar } from "@/components/chat-avatar"
 import type { ChatWithMembers } from "@/queries/chats"
+import type { chatAgent } from "@/trigger/chat"
+import {
+  mintChatAccessToken,
+  startChatSession,
+  loadChatTranscript,
+} from "@/actions/chat"
 
 interface ChatInterfaceProps {
   chat: ChatWithMembers
@@ -49,20 +59,84 @@ export function ChatInterface({ chat }: ChatInterfaceProps) {
     return undefined
   }, [bot])
 
-  const transport = React.useMemo(() => {
-    return new DefaultChatTransport({
-      api: "/api/chat",
-      body: {
-        chatId: chat.id,
-        instructions,
-      },
-    })
-  }, [chat.id, instructions])
+  const clientData = React.useMemo(() => {
+    return { instructions }
+  }, [instructions])
 
-  const { messages, sendMessage, status, stop, error, regenerate } = useChat({
-    id: chat.id,
-    transport,
+  const transport = useTriggerChatTransport<typeof chatAgent>({
+    task: "chat-agent",
+    accessToken: ({ chatId }) => mintChatAccessToken(chatId),
+    startSession: ({ chatId, clientData }) =>
+      startChatSession({ chatId, clientData }),
+    clientData,
   })
+
+  const { messages: initialMessages, isLoading } = useLoadTranscript(
+    chat.id,
+    loadChatTranscript,
+    { transport }
+  )
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden bg-background">
+        <Conversation className="flex-1 min-h-0">
+          <ConversationContent className="mx-auto flex w-full max-w-3xl flex-col items-center justify-center my-auto py-12 gap-4 text-center">
+            <ChatAvatar
+              seed={avatarSeed}
+              alt={botName}
+              className="size-16 rounded-full shadow-sm ring-2 ring-border/50 animate-pulse"
+            />
+            <div className="text-sm text-muted-foreground font-medium">
+              <Shimmer>Loading conversation...</Shimmer>
+            </div>
+          </ConversationContent>
+        </Conversation>
+      </div>
+    )
+  }
+
+  return (
+    <ChatInner
+      key={chat.id}
+      chat={chat}
+      initialMessages={initialMessages}
+      transport={transport}
+      botName={botName}
+      avatarSeed={avatarSeed}
+      botJob={botJob}
+    />
+  )
+}
+
+interface ChatInnerProps {
+  chat: ChatWithMembers
+  initialMessages: UIMessage[]
+  transport: ReturnType<typeof useTriggerChatTransport<typeof chatAgent>>
+  botName: string
+  avatarSeed: string
+  botJob?: string | null
+}
+
+function ChatInner({
+  chat,
+  initialMessages,
+  transport,
+  botName,
+  avatarSeed,
+  botJob,
+}: ChatInnerProps) {
+  const { messages, sendMessage, status, stop: aiStop, error, regenerate } = useChat({
+    id: chat.id,
+    messages: initialMessages,
+    transport,
+    resume: initialMessages.length > 0,
+  })
+
+  const handleStop = React.useCallback(() => {
+    aiStop()
+    transport.stopGeneration(chat.id)
+  }, [aiStop, transport, chat.id])
 
   const handleSubmit = React.useCallback(
     ({ text }: { text: string }) => {
@@ -81,9 +155,9 @@ export function ChatInterface({ chat }: ChatInterfaceProps) {
   )
 
   const suggestions = React.useMemo(() => {
-    if (bot?.job) {
+    if (botJob) {
       return [
-        `How can you help me as a ${bot.job}?`,
+        `How can you help me as a ${botJob}?`,
         "What are your main capabilities?",
         "Give me a quick overview of your role",
       ]
@@ -93,7 +167,7 @@ export function ChatInterface({ chat }: ChatInterfaceProps) {
       "Tell me a bit about what you can do",
       "Let's brainstorm some ideas together",
     ]
-  }, [bot?.job])
+  }, [botJob])
 
   return (
     <div className="flex flex-1 min-h-0 flex-col overflow-hidden bg-background">
@@ -202,7 +276,7 @@ export function ChatInterface({ chat }: ChatInterfaceProps) {
           />
           <PromptInputFooter>
             <PromptInputTools />
-            <PromptInputSubmit status={status} onStop={stop} />
+            <PromptInputSubmit status={status} onStop={handleStop} />
           </PromptInputFooter>
         </PromptInput>
       </div>
