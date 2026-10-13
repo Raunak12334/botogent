@@ -22,6 +22,7 @@
     "@base-ui/react": "^1.9.0",
     "@clerk/nextjs": "^7.9.14",
     "@clerk/ui": "^1.40.0",
+    "@daytona/sdk": "^0.224.0",
     "@dicebear/core": "^10.7.0",
     "@dicebear/styles": "^10.6.0",
     "@hookform/resolvers": "^5.9.1",
