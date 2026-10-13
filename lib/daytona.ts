@@ -27,7 +27,10 @@ export async function createBotSandbox(params: CreateBotSandboxParams): Promise<
   const daytona = getDaytonaClient();
 
   const sandbox = await daytona.create({
-    language: 'typescript',
+    envVars: {
+      DISPLAY: ':0',
+      VNC_RESOLUTION: '1280x800',
+    },
     name: params.name ? `bot-${params.botId.slice(0, 8)}` : undefined,
     labels: {
       botId: params.botId,

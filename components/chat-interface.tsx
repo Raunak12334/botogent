@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useChat } from "@ai-sdk/react"
-import type { UIMessage } from "ai"
+import { isToolUIPart, type UIMessage } from "ai"
 import {
   useTriggerChatTransport,
   useLoadTranscript,
@@ -30,14 +30,39 @@ import {
   Suggestions,
 } from "@/components/ai-elements/suggestion"
 import { Shimmer } from "@/components/ai-elements/shimmer"
+import {
+  Tool,
+  ToolHeader,
+  ToolContent,
+  ToolInput,
+  ToolOutput,
+} from "@/components/ai-elements/tool"
+import {
+  Terminal,
+  TerminalHeader,
+  TerminalTitle,
+  TerminalContent as TerminalBody,
+} from "@/components/ai-elements/terminal"
 import { ChatAvatar } from "@/components/chat-avatar"
 import type { ChatWithMembers } from "@/queries/chats"
-import type { chatAgent } from "@/trigger/chat"
+import type { chatAgent, ChatAgentClientData } from "@/trigger/chat"
 import {
   mintChatAccessToken,
   startChatSession,
   loadChatTranscript,
 } from "@/actions/chat"
+import {
+  TerminalIcon,
+  FileTextIcon,
+  FolderIcon,
+  MousePointerIcon,
+  MoveIcon,
+  ScrollIcon,
+  KeyboardIcon,
+  MonitorIcon,
+  PencilIcon,
+  CheckIcon,
+} from "lucide-react"
 
 interface ChatInterfaceProps {
   chat: ChatWithMembers
@@ -49,19 +74,14 @@ export function ChatInterface({ chat }: ChatInterfaceProps) {
   const avatarSeed = bot?.avatar || bot?.name || "Ada"
   const botJob = bot?.job
 
-  const instructions = React.useMemo(() => {
-    if (bot?.instructions) {
-      return `You are ${bot.name}, whose role is: ${bot.job}.\n\nInstructions:\n${bot.instructions}`
+  const clientData = React.useMemo<ChatAgentClientData>(() => {
+    return {
+      botName: bot?.name || botName,
+      botJob: bot?.job,
+      botInstructions: bot?.instructions,
+      sandboxId: bot?.sandboxId,
     }
-    if (bot) {
-      return `You are ${bot.name}, whose role is: ${bot.job}.`
-    }
-    return undefined
-  }, [bot])
-
-  const clientData = React.useMemo(() => {
-    return { instructions }
-  }, [instructions])
+  }, [bot, botName])
 
   const transport = useTriggerChatTransport<typeof chatAgent>({
     task: "chat-agent",
@@ -116,6 +136,322 @@ interface ChatInnerProps {
   botName: string
   avatarSeed: string
   botJob?: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Tool-call rendering helpers
+// ---------------------------------------------------------------------------
+
+type ToolPartLike = {
+  type: string
+  toolName?: string
+  state:
+    | "input-streaming"
+    | "input-available"
+    | "approval-requested"
+    | "approval-responded"
+    | "output-available"
+    | "output-denied"
+    | "output-error"
+  input?: Record<string, unknown>
+  output?: unknown
+  errorText?: string
+}
+
+function renderToolPart(part: ToolPartLike, key: string) {
+  const toolName =
+    part.toolName ??
+    (part.type === "dynamic-tool" ? "tool" : part.type.replace(/^tool-/, ""))
+  const state = part.state
+  const input = (part.input ?? {}) as Record<string, unknown>
+  const output = part.output as Record<string, unknown> | undefined
+
+  // viewScreen — show status in chat without raw vision image
+  if (toolName === "viewScreen") {
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title="Look at the screen"
+          toolName="viewScreen"
+        />
+        <ToolContent>
+          <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground bg-muted/30 rounded-md">
+            <MonitorIcon className="size-4 shrink-0 text-primary/70" />
+            <span>Screen captured and inspected for visual analysis</span>
+          </div>
+          {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // bash — terminal-style
+  if (toolName === "bash") {
+    const command = String(input.command ?? "")
+    const stdout = output ? String((output as { stdout?: string }).stdout ?? "") : undefined
+    const exitCode = output ? (output as { exitCode?: number }).exitCode : undefined
+    return (
+      <Tool key={key} defaultOpen>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={command.length > 60 ? command.slice(0, 60) + "…" : command}
+          toolName="bash"
+        />
+        <ToolContent>
+          <Terminal output={stdout ?? ""} isStreaming={state === "input-available"}>
+            <TerminalHeader>
+              <TerminalTitle>$ {command}</TerminalTitle>
+              {exitCode !== undefined && (
+                <span className={`text-xs font-mono ${exitCode === 0 ? "text-green-400" : "text-red-400"}`}>
+                  exit {exitCode}
+                </span>
+              )}
+            </TerminalHeader>
+            <TerminalBody />
+          </Terminal>
+          {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // showScreen — render the screenshot inline
+  if (toolName === "showScreen") {
+    const dataUri = output ? (output as { dataUri?: string }).dataUri : undefined
+    const caption = output ? (output as { caption?: string }).caption : undefined
+    return (
+      <Tool key={key} defaultOpen>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={caption ?? "Screen"}
+          toolName="showScreen"
+        />
+        <ToolContent>
+          {dataUri ? (
+            <div className="space-y-2">
+              <img
+                src={dataUri}
+                alt={caption ?? "Sandbox screen"}
+                className="w-full rounded-md border border-border/50 shadow-sm"
+              />
+              {caption && (
+                <p className="text-xs text-muted-foreground text-center">{caption}</p>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">Screenshot unavailable</p>
+          )}
+          {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // readFile
+  if (toolName === "readFile") {
+    const filePath = String(input.path ?? "")
+    const content = output ? (output as { content?: string }).content : undefined
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={filePath}
+          toolName="readFile"
+        />
+        <ToolContent>
+          {content !== undefined ? (
+            <div className="space-y-2">
+              <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+                {filePath}
+              </h4>
+              <pre className="max-h-64 overflow-auto rounded-md bg-muted/50 p-3 text-xs font-mono whitespace-pre-wrap">
+                {content}
+              </pre>
+            </div>
+          ) : (
+            <ToolInput input={input} />
+          )}
+          <ToolOutput output={output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // writeFile
+  if (toolName === "writeFile") {
+    const filePath = String(input.path ?? "")
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={filePath}
+          toolName="writeFile"
+        />
+        <ToolContent>
+          <ToolInput input={{ path: filePath, content: input.content }} />
+          <ToolOutput output={output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // listFiles
+  if (toolName === "listFiles") {
+    const dirPath = String(input.path ?? "/home/daytona")
+    const entries = output
+      ? (output as { entries?: { name: string; type: string; size?: number }[] }).entries ?? []
+      : []
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={dirPath}
+          toolName="listFiles"
+        />
+        <ToolContent>
+          {entries.length > 0 ? (
+            <div className="rounded-md border border-border/50 divide-y divide-border/30 overflow-hidden text-xs font-mono">
+              {entries.map((e) => (
+                <div key={e.name} className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 hover:bg-muted/60 transition-colors">
+                  {e.type === "directory" ? (
+                    <FolderIcon className="size-3.5 text-blue-500 shrink-0" />
+                  ) : (
+                    <FileTextIcon className="size-3.5 text-muted-foreground shrink-0" />
+                  )}
+                  <span>{e.name}</span>
+                  {e.size !== undefined && (
+                    <span className="ml-auto text-muted-foreground">
+                      {e.size < 1024 ? `${e.size}B` : `${(e.size / 1024).toFixed(1)}KB`}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ToolInput input={input} />
+          )}
+          <ToolOutput output={output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // mouseClick
+  if (toolName === "mouseClick") {
+    const { x, y, button = "left", double: dbl } = input as { x: number; y: number; button?: string; double?: boolean }
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={`${dbl ? "double-" : ""}${button} click at (${x}, ${y})`}
+          toolName="mouseClick"
+        />
+        <ToolContent>
+          <ToolInput input={{ x, y, button, double: dbl }} />
+          <ToolOutput output={output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // mouseMove
+  if (toolName === "mouseMove") {
+    const { x, y } = input as { x: number; y: number }
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={`Move to (${x}, ${y})`}
+          toolName="mouseMove"
+        />
+        <ToolContent>
+          <ToolInput input={input} />
+          <ToolOutput output={output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // mouseScroll
+  if (toolName === "mouseScroll") {
+    const { x, y, direction, amount } = input as { x: number; y: number; direction: string; amount: number }
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={`Scroll ${direction} ×${amount} at (${x}, ${y})`}
+          toolName="mouseScroll"
+        />
+        <ToolContent>
+          <ToolInput input={input} />
+          <ToolOutput output={output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // keyboardType
+  if (toolName === "keyboardType") {
+    const text = String(input.text ?? "")
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={text.length > 50 ? `"${text.slice(0, 50)}…"` : `"${text}"`}
+          toolName="keyboardType"
+        />
+        <ToolContent>
+          <ToolInput input={{ text }} />
+          <ToolOutput output={output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // keyboardPress
+  if (toolName === "keyboardPress") {
+    const keyLabel = String(input.hotkey ?? input.key ?? "")
+    return (
+      <Tool key={key}>
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={keyLabel}
+          toolName="keyboardPress"
+        />
+        <ToolContent>
+          <ToolInput input={input} />
+          <ToolOutput output={output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    )
+  }
+
+  // Generic fallback
+  return (
+    <Tool key={key}>
+      <ToolHeader
+        type="dynamic-tool"
+        state={state}
+        toolName={toolName ?? "tool"}
+      />
+      <ToolContent>
+        <ToolInput input={input} />
+        <ToolOutput output={output} errorText={part.errorText} />
+      </ToolContent>
+    </Tool>
+  )
 }
 
 function ChatInner({
@@ -221,16 +557,35 @@ function ChatInner({
                   <Message from={message.role} className="max-w-[85%]">
                     <MessageContent>
                       {message.parts.map((part, i) => {
-                        switch (part.type) {
-                          case "text":
-                            return (
-                              <MessageResponse key={`${message.id}-${i}`}>
-                                {part.text}
-                              </MessageResponse>
-                            )
-                          default:
-                            return null
+                        const partKey = `${message.id}-${i}`
+                        if (part.type === "text") {
+                          return (
+                            <MessageResponse key={partKey}>
+                              {part.text}
+                            </MessageResponse>
+                          )
                         }
+                        if (isToolUIPart(part)) {
+                          const toolName =
+                            "toolName" in part && typeof part.toolName === "string"
+                              ? part.toolName
+                              : part.type.replace(/^tool-/, "")
+                          return renderToolPart(
+                            {
+                              type: part.type,
+                              toolName,
+                              state: part.state,
+                              input: (part.input as Record<string, unknown>) ?? {},
+                              output: "output" in part ? part.output : undefined,
+                              errorText:
+                                "errorText" in part
+                                  ? (part.errorText as string)
+                                  : undefined,
+                            },
+                            partKey
+                          )
+                        }
+                        return null
                       })}
                     </MessageContent>
                   </Message>

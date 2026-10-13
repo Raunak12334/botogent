@@ -4,7 +4,7 @@ import { auth } from '@clerk/nextjs/server';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
 import { chat, defaultStorage } from '@trigger.dev/sdk/ai';
 import { getChat } from '@/queries/chats';
-import type { chatAgent } from '@/trigger/chat';
+import type { chatAgent, ChatAgentClientData } from '@/trigger/chat';
 
 const baseStartChatSession = chat.createStartSessionAction<typeof chatAgent>('chat-agent');
 const baseLoadTranscript = chat.createLoadTranscriptAction(defaultStorage, { limit: 50 });
@@ -12,10 +12,11 @@ const baseLoadTranscript = chat.createLoadTranscriptAction(defaultStorage, { lim
 /**
  * Creates or resumes a Trigger.dev chat session and returns a session public access token.
  * Authenticated and authorized against Clerk user and chat ID.
+ * Automatically injects the bot's identity, job role, guidelines, and Daytona sandbox ID into clientData.
  */
 export async function startChatSession(params: {
   chatId: string;
-  clientData?: { instructions?: string };
+  clientData?: Partial<ChatAgentClientData>;
 }) {
   const { userId } = await auth();
   if (!userId) {
@@ -27,7 +28,20 @@ export async function startChatSession(params: {
     throw new Error('Chat not found or access denied');
   }
 
-  return baseStartChatSession(params);
+  const bot = existingChat.bot;
+
+  const mergedClientData: ChatAgentClientData = {
+    botName: bot?.name ?? params.clientData?.botName,
+    botJob: bot?.job ?? params.clientData?.botJob,
+    botInstructions: bot?.instructions ?? params.clientData?.botInstructions,
+    sandboxId: bot?.sandboxId ?? params.clientData?.sandboxId,
+    instructions: params.clientData?.instructions,
+  };
+
+  return baseStartChatSession({
+    chatId: params.chatId,
+    clientData: mergedClientData,
+  });
 }
 
 /**

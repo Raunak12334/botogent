@@ -1,0 +1,412 @@
+/**
+ * Daytona Linux sandbox computer-use tools.
+ *
+ * Each tool maps to a Daytona SDK operation.
+ * Supports lazy binding of `sandboxId` from Trigger.dev `clientData` per-turn,
+ * while also allowing the model to optionally pass `sandboxId`.
+ */
+
+import { tool } from "ai";
+import { z } from "zod";
+import { getDaytonaClient } from "@/lib/daytona";
+import type { Sandbox } from "@daytona/sdk";
+
+// ---------------------------------------------------------------------------
+// Helpers & Computer-Use Daemon Lifecycle
+// ---------------------------------------------------------------------------
+
+async function getSandbox(sandboxId: string) {
+  const client = getDaytonaClient();
+  const sandbox = await client.get(sandboxId);
+  if (!sandbox) throw new Error(`Daytona sandbox ${sandboxId} not found`);
+  return sandbox;
+}
+
+// Track sandboxes where computerUse services (Xvfb, XFCE4, VNC, etc.) have been verified active
+const runningSandboxes = new Set<string>();
+
+/**
+ * Ensures that the sandbox's desktop GUI and computerUse processes
+ * (Xvfb, xfce4, x11vnc, novnc) are running before executing GUI actions.
+ */
+async function ensureComputerUse(sandbox: Sandbox, force = false): Promise<void> {
+  if (!force && runningSandboxes.has(sandbox.id)) return;
+
+  try {
+    const status = await sandbox.computerUse.getStatus();
+    if (status.status !== "active" && status.status !== "running") {
+      await sandbox.computerUse.start();
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    runningSandboxes.add(sandbox.id);
+  } catch {
+    try {
+      await sandbox.computerUse.start();
+      await new Promise((r) => setTimeout(r, 1000));
+      runningSandboxes.add(sandbox.id);
+    } catch (startErr) {
+      console.warn(
+        `[Daytona] computerUse.start warning for sandbox ${sandbox.id}:`,
+        startErr instanceof Error ? startErr.message : startErr
+      );
+    }
+  }
+}
+
+/**
+ * Creates sandbox tools bound to an optional default sandboxId.
+ * The model does NOT need to guess or supply sandboxId on tool calls.
+ */
+export function createSandboxTools(boundSandboxId?: string | null) {
+  const resolveSandbox = async (providedId?: string) => {
+    const id = providedId || boundSandboxId;
+    if (!id) {
+      throw new Error(
+        "No Daytona sandbox ID assigned to this bot. Cannot execute sandbox tool."
+      );
+    }
+    return getSandbox(id);
+  };
+
+  const captureScreen = async (providedId?: string) => {
+    const sandbox = await resolveSandbox(providedId);
+    await ensureComputerUse(sandbox);
+
+    let shot;
+    try {
+      shot = await sandbox.computerUse.screenshot.takeCompressed({
+        format: "jpeg",
+        quality: 80,
+        scale: 0.8,
+      });
+    } catch (firstErr) {
+      // If first attempt failed, re-initialize desktop and retry once
+      console.warn(
+        `[Daytona] First screenshot attempt failed, retrying after ensureComputerUse:`,
+        firstErr instanceof Error ? firstErr.message : firstErr
+      );
+      await ensureComputerUse(sandbox, true);
+      shot = await sandbox.computerUse.screenshot.takeCompressed({
+        format: "jpeg",
+        quality: 80,
+        scale: 0.8,
+      });
+    }
+
+    return {
+      dataUri: `data:image/jpeg;base64,${shot.screenshot ?? ""}`,
+      base64: shot.screenshot ?? "",
+      sizeBytes: shot.sizeBytes ?? 0,
+    };
+  };
+
+  // -------------------------------------------------------------------------
+  // Bash / Shell
+  // -------------------------------------------------------------------------
+  const bash = tool({
+    description:
+      "Run a shell command in the Daytona Linux sandbox. Returns stdout and exit code. " +
+      "Use for installing packages, launching GUI apps (e.g. `chromium &> /dev/null &`), running scripts, and checking files.",
+    inputSchema: z.object({
+      command: z.string().describe("The shell command to execute"),
+      cwd: z.string().optional().describe("Working directory override"),
+      timeout: z.number().optional().describe("Max seconds to wait"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ command, sandboxId, cwd, timeout }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      if (
+        command.includes("chromium") ||
+        command.includes("chrome") ||
+        command.includes("DISPLAY") ||
+        command.includes("xdotool")
+      ) {
+        await ensureComputerUse(sandbox);
+      }
+      const response = await sandbox.process.executeCommand(
+        command,
+        cwd,
+        undefined,
+        timeout
+      );
+      return {
+        stdout: response.result ?? "",
+        exitCode: response.exitCode,
+        nextStepRecommendation:
+          "Command executed. Call viewScreen to inspect the desktop and locate UI elements, or proceed with next tool call.",
+      };
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // File System
+  // -------------------------------------------------------------------------
+  const readFile = tool({
+    description:
+      "Read the contents of a file in the sandbox filesystem as a UTF-8 string.",
+    inputSchema: z.object({
+      path: z.string().describe("Absolute or relative path to the file"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ path, sandboxId }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      const bytes = await sandbox.fs.downloadFile(path);
+      return { content: bytes.toString("utf-8") };
+    },
+  });
+
+  const writeFile = tool({
+    description:
+      "Write text content to a file in the sandbox filesystem.",
+    inputSchema: z.object({
+      path: z.string().describe("Absolute or relative path to the file"),
+      content: z.string().describe("Text content to write"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ path, content, sandboxId }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      await sandbox.fs.uploadFile(Buffer.from(content, "utf-8"), path);
+      return { success: true, path };
+    },
+  });
+
+  const listFiles = tool({
+    description:
+      "List files and directories at a given path in the sandbox.",
+    inputSchema: z.object({
+      path: z
+        .string()
+        .default("/home/daytona")
+        .describe("Directory path to list"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ path, sandboxId }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      const files = await sandbox.fs.listFiles(path);
+      return {
+        path,
+        entries: files.map(
+          (f: { name: string; isDir?: boolean; size?: number }) => ({
+            name: f.name,
+            type: f.isDir ? "directory" : "file",
+            size: f.isDir ? undefined : f.size,
+          })
+        ),
+      };
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // Mouse
+  // -------------------------------------------------------------------------
+  const mouseClick = tool({
+    description:
+      "Click the mouse at a specific (x, y) coordinate on the sandbox desktop. Supports left, right, middle buttons, and double-click.",
+    inputSchema: z.object({
+      x: z.number().describe("X coordinate"),
+      y: z.number().describe("Y coordinate"),
+      button: z
+        .enum(["left", "right", "middle"])
+        .default("left")
+        .describe("Mouse button"),
+      double: z.boolean().default(false).describe("Whether to double-click"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ x, y, button, double: dbl, sandboxId }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      await ensureComputerUse(sandbox);
+      const result = await sandbox.computerUse.mouse.click(x, y, button, dbl);
+      return {
+        x: result.x,
+        y: result.y,
+        button,
+        double: dbl,
+        nextStepRecommendation:
+          "Click performed. Call viewScreen to verify updated state or keyboardType to input text.",
+      };
+    },
+  });
+
+  const mouseMove = tool({
+    description:
+      "Move the mouse cursor to a specific (x, y) coordinate on the sandbox desktop.",
+    inputSchema: z.object({
+      x: z.number().describe("X coordinate to move to"),
+      y: z.number().describe("Y coordinate to move to"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ x, y, sandboxId }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      await ensureComputerUse(sandbox);
+      const result = await sandbox.computerUse.mouse.move(x, y);
+      return { x: result.x, y: result.y };
+    },
+  });
+
+  const mouseScroll = tool({
+    description:
+      "Scroll the mouse wheel at a specific (x, y) coordinate on the sandbox desktop.",
+    inputSchema: z.object({
+      x: z.number().describe("X coordinate to scroll at"),
+      y: z.number().describe("Y coordinate to scroll at"),
+      direction: z.enum(["up", "down"]).describe("Scroll direction"),
+      amount: z.number().default(3).describe("Number of scroll units"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ x, y, direction, amount, sandboxId }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      await ensureComputerUse(sandbox);
+      const ok = await sandbox.computerUse.mouse.scroll(
+        x,
+        y,
+        direction,
+        amount
+      );
+      return { success: ok, x, y, direction, amount };
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // Keyboard
+  // -------------------------------------------------------------------------
+  const keyboardType = tool({
+    description:
+      "Type text into the sandbox desktop via keyboard input into the focused window/field.",
+    inputSchema: z.object({
+      text: z.string().describe("Text to type"),
+      delay: z
+        .number()
+        .optional()
+        .describe("Delay between characters in milliseconds"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ text, delay, sandboxId }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      await ensureComputerUse(sandbox);
+      await sandbox.computerUse.keyboard.type(text, delay);
+      return {
+        success: true,
+        typed: text,
+        nextStepRecommendation:
+          "Text typed. Call keyboardPress with 'Return' to submit or viewScreen to inspect.",
+      };
+    },
+  });
+
+  const keyboardPress = tool({
+    description:
+      "Press a key or key combination in the sandbox desktop (e.g. 'Return', 'Escape', 'Tab', or 'ctrl+c').",
+    inputSchema: z.object({
+      hotkey: z
+        .string()
+        .optional()
+        .describe("Hotkey chord e.g. 'ctrl+c', 'alt+tab', 'Return'"),
+      key: z
+        .string()
+        .optional()
+        .describe("Single key e.g. 'enter', 'escape', 'tab'"),
+      modifiers: z
+        .array(z.enum(["ctrl", "alt", "shift", "cmd"]))
+        .optional()
+        .describe("Modifier keys (used with `key`)"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ hotkey, key, modifiers, sandboxId }) => {
+      const sandbox = await resolveSandbox(sandboxId);
+      await ensureComputerUse(sandbox);
+      if (hotkey) {
+        await sandbox.computerUse.keyboard.hotkey(hotkey);
+        return {
+          success: true,
+          hotkey,
+          nextStepRecommendation:
+            "Key pressed. Call viewScreen to inspect updated screen state.",
+        };
+      }
+      if (key) {
+        await sandbox.computerUse.keyboard.press(key, modifiers);
+        return {
+          success: true,
+          key,
+          modifiers,
+          nextStepRecommendation:
+            "Key pressed. Call viewScreen to inspect updated screen state.",
+        };
+      }
+      throw new Error("Provide either `hotkey` or `key`");
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // Screen Capture
+  // -------------------------------------------------------------------------
+  const viewScreen = tool({
+    description:
+      "Take a screenshot of the sandbox desktop for internal agent vision. " +
+      "Call this to inspect the screen and locate coordinates before clicking or typing.",
+    inputSchema: z.object({
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ sandboxId }) => captureScreen(sandboxId),
+    toModelOutput: ({ output }) => ({
+      type: "content" as const,
+      value: [
+        {
+          type: "file" as const,
+          mediaType: "image/jpeg" as const,
+          data: { type: "data" as const, data: output.base64 },
+        },
+        {
+          type: "text" as const,
+          text: "Screen image captured. Analyze the screenshot to locate coordinates for mouseClick or input fields for keyboardType. Call showScreen when ready to show results to user.",
+        },
+      ],
+    }),
+  });
+
+  const showScreen = tool({
+    description:
+      "Take a screenshot of the sandbox desktop and display it to the user in the chat.",
+    inputSchema: z.object({
+      caption: z
+        .string()
+        .optional()
+        .describe("Optional caption to display with the screenshot"),
+      sandboxId: z.string().optional().describe("Optional sandbox ID override"),
+    }),
+    execute: async ({ sandboxId, caption }) => {
+      const shot = await captureScreen(sandboxId);
+      return { ...shot, caption };
+    },
+    toModelOutput: ({ output }) => ({
+      type: "content" as const,
+      value: [
+        {
+          type: "file" as const,
+          mediaType: "image/jpeg" as const,
+          data: { type: "data" as const, data: output.base64 },
+        },
+        ...(output.caption
+          ? [{ type: "text" as const, text: output.caption }]
+          : []),
+      ],
+    }),
+  });
+
+  return {
+    bash,
+    readFile,
+    writeFile,
+    listFiles,
+    mouseClick,
+    mouseMove,
+    mouseScroll,
+    keyboardType,
+    keyboardPress,
+    viewScreen,
+    showScreen,
+  };
+}
+
+export const sandboxTools = createSandboxTools();
+export type SandboxTools = ReturnType<typeof createSandboxTools>;
