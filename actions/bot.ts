@@ -1,6 +1,7 @@
 'use server';
 
 import { auth } from '@clerk/nextjs/server';
+import { and, eq, inArray } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/db';
 import {
@@ -15,6 +16,7 @@ import {
   type ChatMember,
 } from '@/lib/db/schema';
 import { nanoid } from 'nanoid';
+import { createBotSandbox, deleteBotSandbox } from '@/lib/daytona';
 
 export type CreateBotInput = {
   name: string;
@@ -48,11 +50,19 @@ export async function createBot(input: CreateBotInput): Promise<CreateBotResult>
     const botId = nanoid();
     const chatId = nanoid();
 
+    // Create Daytona sandbox for this bot without starting/invoking code in it
+    const sandbox = await createBotSandbox({
+      botId,
+      name: input.name,
+      userId,
+    });
+
     const validatedBot = insertBotSchema.parse({
       ...input,
       id: botId,
       userId,
       avatar: input.avatar || nanoid(),
+      sandboxId: sandbox.id,
     });
 
     const validatedChat = insertChatSchema.parse({
@@ -96,4 +106,73 @@ export async function createBot(input: CreateBotInput): Promise<CreateBotResult>
     };
   }
 }
+
+export type DeleteBotResult =
+  | { success: true; data: { botId: string } }
+  | { success: false; error: string };
+
+export async function deleteBot(botId: string): Promise<DeleteBotResult> {
+  const { userId } = await auth();
+
+  if (!userId) {
+    return {
+      success: false,
+      error: 'Unauthorized: You must be signed in to delete a bot.',
+    };
+  }
+
+  try {
+    // Verify bot belongs to authenticated user
+    const existingBot = await db.query.bots.findFirst({
+      where: and(eq(bots.id, botId), eq(bots.userId, userId)),
+    });
+
+    if (!existingBot) {
+      return {
+        success: false,
+        error: 'Bot not found or unauthorized.',
+      };
+    }
+
+    // Delete associated Daytona sandbox if exists
+    if (existingBot.sandboxId) {
+      await deleteBotSandbox(existingBot.sandboxId);
+    }
+
+    // Find direct chats where this bot is a member to clean them up
+    const memberships = await db.query.chatMembers.findMany({
+      where: eq(chatMembers.botId, botId),
+      with: {
+        chat: true,
+      },
+    });
+
+    const directChatIdsToDelete = memberships
+      .filter((m) => m.chat && m.chat.kind === 'direct' && m.chat.userId === userId)
+      .map((m) => m.chatId);
+
+    // Delete bot (cascades to chatMembers)
+    await db.delete(bots).where(and(eq(bots.id, botId), eq(bots.userId, userId)));
+
+    // Clean up direct chats associated with this bot
+    if (directChatIdsToDelete.length > 0) {
+      await db.delete(chats).where(inArray(chats.id, directChatIdsToDelete));
+    }
+
+    revalidatePath('/');
+    revalidatePath('/chats');
+
+    return {
+      success: true,
+      data: { botId },
+    };
+  } catch (error) {
+    console.error('Error deleting bot:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete bot',
+    };
+  }
+}
+
 

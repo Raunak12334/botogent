@@ -5,6 +5,7 @@ import { eq, desc } from "drizzle-orm"
 
 import { ChatAvatar } from "@/components/chat-avatar"
 import { BotDialog } from "@/components/bot-dialog"
+import { BotCard } from "@/components/bot-card"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
@@ -24,18 +25,23 @@ export default async function Page() {
   const { userId } = await auth()
 
   const userBots = userId
-    ? await db
-        .select()
-        .from(bots)
-        .where(eq(bots.userId, userId))
-        .orderBy(desc(bots.createdAt))
+    ? await db.query.bots.findMany({
+        where: eq(bots.userId, userId),
+        orderBy: [desc(bots.createdAt)],
+        with: {
+          memberships: {
+            with: {
+              chat: true,
+            },
+          },
+        },
+      })
     : []
 
   const seed = nanoid()
 
   return (
     <main className="relative flex min-h-screen w-full flex-col items-center justify-center bg-background p-4 text-foreground">
-
       {userBots.length === 0 ? (
         <Empty className="max-w-md flex-initial border-none p-0">
           <EmptyHeader className="max-w-md gap-2">
@@ -76,7 +82,7 @@ export default async function Page() {
                 Your Bots
               </h1>
               <p className="text-sm text-muted-foreground">
-                Manage and chat with your custom bots.
+                Manage and chat with your custom bots and Daytona sandboxes.
               </p>
             </div>
             <BotDialog
@@ -94,35 +100,23 @@ export default async function Page() {
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-            {userBots.map((bot) => (
-              <div
-                key={bot.id}
-                className="flex flex-col gap-3 rounded-2xl border border-border/50 bg-card p-5 shadow-xs transition-all hover:border-border"
-              >
-                <div className="flex items-center gap-3">
-                  <ChatAvatar
-                    seed={bot.avatar}
-                    className="size-10 rounded-xl border border-border/40"
-                  />
-                  <div className="flex flex-col min-w-0">
-                    <span className="truncate text-base font-medium text-foreground">
-                      {bot.name}
-                    </span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {bot.job}
-                    </span>
-                  </div>
-                </div>
-                {bot.instructions && (
-                  <p className="line-clamp-3 text-xs/relaxed text-muted-foreground">
-                    {bot.instructions}
-                  </p>
-                )}
-              </div>
-            ))}
+            {userBots.map((bot) => {
+              const directChatId = bot.memberships.find(
+                (m) => m.chat?.kind === "direct"
+              )?.chatId
+
+              return (
+                <BotCard
+                  key={bot.id}
+                  bot={bot}
+                  chatId={directChatId}
+                />
+              )
+            })}
           </div>
         </div>
       )}
     </main>
   )
 }
+

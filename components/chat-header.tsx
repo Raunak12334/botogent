@@ -1,15 +1,31 @@
 "use client"
 
 import * as React from "react"
-import { Monitor } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Box, Monitor, MoreVertical, Trash2, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ChatAvatar } from "@/components/chat-avatar"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { deleteBot } from "@/actions/bot"
 import { cn } from "@/lib/utils"
 import type { ChatWithMembers } from "@/queries/chats"
 import type { UserChat } from "@/queries/bots"
@@ -25,12 +41,14 @@ export interface ChatHeaderProps extends React.ComponentProps<"header"> {
           id: string
           name: string
           avatar?: string | null
+          sandboxId?: string | null
         } | null
         members?: Array<{
           bot: {
             id: string
             name: string
             avatar?: string | null
+            sandboxId?: string | null
           }
         }>
       }
@@ -38,10 +56,15 @@ export interface ChatHeaderProps extends React.ComponentProps<"header"> {
 }
 
 /**
- * ChatHeader displays the bot avatar, chat/bot name, and an inactive desktop button.
+ * ChatHeader displays the bot avatar, chat/bot name, Daytona sandbox badge, and actions.
  * For group chats, it currently falls back to the first member's information.
  */
 export function ChatHeader({ chat, className, ...props }: ChatHeaderProps) {
+  const router = useRouter()
+  const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [isDeleting, setIsDeleting] = React.useState(false)
+  const [deleteError, setDeleteError] = React.useState<string | null>(null)
+
   // Ignore group chat for now, simply use the first chat member's information
   const members = chat && "members" in chat ? chat.members : undefined
   const firstMember = members?.[0]
@@ -49,47 +72,155 @@ export function ChatHeader({ chat, className, ...props }: ChatHeaderProps) {
   const botName = chat?.name || bot?.name || "Chat"
   const avatarSeed = bot?.avatar || bot?.name || "Ada"
 
-  return (
-    <header
-      className={cn(
-        "flex h-12 w-full shrink-0 items-center justify-between border-b border-border bg-background px-4",
-        className
-      )}
-      {...props}
-    >
-      <div className="flex items-center gap-3 min-w-0">
-        <ChatAvatar
-          seed={avatarSeed}
-          alt={botName}
-          className="size-7 rounded-full shrink-0"
-        />
-        <span className="truncate text-sm font-medium text-foreground">
-          {botName}
-        </span>
-      </div>
+  const handleDeleteBot = async () => {
+    if (!bot?.id) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      const res = await deleteBot(bot.id)
+      if (res.success) {
+        setDeleteOpen(false)
+        router.refresh()
+        router.push("/")
+      } else {
+        setDeleteError(res.error)
+      }
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Failed to delete bot")
+    } finally {
+      setIsDeleting(false)
+    }
+  }
 
-      <div className="flex items-center gap-1 shrink-0">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                className="text-muted-foreground hover:text-foreground cursor-pointer"
-                aria-label="Desktop"
-              >
-                <Monitor className="size-4" />
-              </Button>
-            }
+  return (
+    <>
+      <header
+        className={cn(
+          "flex h-12 w-full shrink-0 items-center justify-between border-b border-border bg-background px-4",
+          className
+        )}
+        {...props}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <ChatAvatar
+            seed={avatarSeed}
+            alt={botName}
+            className="size-7 rounded-full shrink-0"
           />
-          <TooltipContent side="bottom" align="end">
-            Desktop
-          </TooltipContent>
-        </Tooltip>
-      </div>
-    </header>
+          <span className="truncate text-sm font-medium text-foreground">
+            {botName}
+          </span>
+          {bot?.sandboxId && (
+            <div
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-900/60 px-2 py-0.5 font-mono text-[11px] text-neutral-300"
+              title={`Daytona Sandbox ID: ${bot.sandboxId}`}
+            >
+              <Box className="size-3 text-emerald-400 shrink-0" />
+              <span className="text-neutral-400">Sandbox:</span>
+              <span className="truncate max-w-[100px]">{bot.sandboxId.slice(0, 8)}...</span>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  type="button"
+                  className="text-muted-foreground hover:text-foreground cursor-pointer"
+                  aria-label="Desktop"
+                >
+                  <Monitor className="size-4" />
+                </Button>
+              }
+            />
+            <TooltipContent side="bottom" align="end">
+              Desktop
+            </TooltipContent>
+          </Tooltip>
+
+          {bot?.id && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground cursor-pointer"
+                    aria-label="More actions"
+                  >
+                    <MoreVertical className="size-4" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem
+                  className="cursor-pointer gap-2 text-destructive focus:text-destructive"
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Trash2 className="size-4" />
+                  <span>Delete bot</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </header>
+
+      {bot && (
+        <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+          <DialogContent className="max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle>Delete bot</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete <strong className="text-foreground">{bot.name}</strong>?
+                This will permanently delete the bot, close this chat, and destroy its associated Daytona sandbox.
+              </DialogDescription>
+            </DialogHeader>
+
+            {deleteError && (
+              <div className="rounded-md bg-destructive/10 p-2.5 text-xs text-destructive">
+                {deleteError}
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setDeleteOpen(false)}
+                disabled={isDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                onClick={handleDeleteBot}
+                disabled={isDeleting}
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete bot"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
   )
 }
 
 export default ChatHeader
+
