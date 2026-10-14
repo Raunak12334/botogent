@@ -32,6 +32,21 @@ export async function startChatSession(params: {
     ? existingChat.bots.find((b) => b.id === params.clientData?.botId) ?? existingChat.bot
     : existingChat.bot;
 
+  const isGroup =
+    params.clientData?.isGroup ??
+    (existingChat.kind === 'group' || existingChat.bots.length > 1);
+
+  const availableBots =
+    params.clientData?.availableBots ??
+    existingChat.bots.map((b) => ({
+      id: b.id,
+      name: b.name,
+      job: b.job,
+      instructions: b.instructions,
+      avatar: b.avatar,
+      sandboxId: b.sandboxId,
+    }));
+
   const mergedClientData: ChatAgentClientData = {
     botId: selectedBot?.id ?? params.clientData?.botId,
     botName: params.clientData?.botName ?? selectedBot?.name,
@@ -39,6 +54,9 @@ export async function startChatSession(params: {
     botInstructions: params.clientData?.botInstructions ?? selectedBot?.instructions,
     sandboxId: params.clientData?.sandboxId ?? selectedBot?.sandboxId,
     instructions: params.clientData?.instructions,
+    isGroup,
+    chatName: params.clientData?.chatName ?? existingChat.name ?? undefined,
+    availableBots,
   };
 
   return baseStartChatSession({

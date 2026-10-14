@@ -69,6 +69,7 @@ import {
   MonitorIcon,
   PencilIcon,
   CheckIcon,
+  ArrowRightIcon,
 } from "lucide-react"
 
 interface ChatInterfaceProps {
@@ -116,8 +117,18 @@ export function ChatInterface({ chat }: ChatInterfaceProps) {
       botJob: currentBot?.job,
       botInstructions: currentBot?.instructions,
       sandboxId: currentBot?.sandboxId,
+      isGroup,
+      chatName: chat.name || (isGroup ? "Group Chat" : currentBot?.name || "AI Assistant"),
+      availableBots: chatBots.map((b) => ({
+        id: b.id,
+        name: b.name,
+        job: b.job,
+        instructions: b.instructions,
+        avatar: b.avatar,
+        sandboxId: b.sandboxId,
+      })),
     }
-  }, [currentBot])
+  }, [currentBot, isGroup, chat.name, chatBots])
 
   const transport = useTriggerChatTransport<typeof chatAgent>({
     task: "chat-agent",
@@ -228,6 +239,90 @@ function renderToolPart(part: ToolPartLike, key: string) {
   const state = part.state
   const input = (part.input ?? {}) as Record<string, unknown>
   const output = part.output as Record<string, unknown> | undefined
+
+  // handOff — group chat delegation
+  if (toolName === "handOff") {
+    const outputData = output as
+      | {
+          targetBotId?: string
+          targetBotName?: string
+          targetBotJob?: string
+          targetBotAvatar?: string
+          fromBotName?: string
+          reason?: string
+          context?: string
+        }
+      | undefined
+
+    const targetName =
+      outputData?.targetBotName ||
+      (typeof input.targetBotName === "string" ? input.targetBotName : "Teammate")
+    const targetJob = outputData?.targetBotJob
+    const fromName = outputData?.fromBotName
+    const reason =
+      outputData?.reason ||
+      (typeof input.reason === "string" ? input.reason : "")
+    const targetAvatar = outputData?.targetBotAvatar || targetName
+
+    return (
+      <Tool key={key} defaultOpen className="overflow-hidden border-primary/20 bg-primary/5">
+        <ToolHeader
+          type="dynamic-tool"
+          state={state}
+          title={`Handing off to ${targetName}`}
+          toolName="handOff"
+        />
+        <ToolContent>
+          <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-card p-3.5 shadow-xs">
+            <div className="flex items-center gap-3">
+              {fromName && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <ChatAvatar seed={fromName} className="size-6 rounded-full" />
+                    <span className="text-xs font-semibold text-foreground/80">{fromName}</span>
+                  </div>
+                  <ArrowRightIcon className="size-4 text-primary shrink-0" />
+                </>
+              )}
+              <div className="flex items-center gap-2.5">
+                <ChatAvatar
+                  seed={targetAvatar}
+                  alt={targetName}
+                  className="size-7 rounded-full shadow-xs ring-1 ring-primary/40"
+                />
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-foreground">{targetName}</span>
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                      Assigned
+                    </span>
+                  </div>
+                  {targetJob && (
+                    <span className="text-[11px] text-muted-foreground">{targetJob}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {reason && (
+              <div className="rounded-md bg-muted/40 p-2.5 text-xs text-muted-foreground border border-border/40">
+                <div className="font-semibold text-foreground mb-0.5 text-[11px]">Reason for hand-off:</div>
+                <p className="italic text-foreground/90">{reason}</p>
+              </div>
+            )}
+
+            {state === "output-available" && (
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                <CheckIcon className="size-3.5" />
+                <span>Hand-off confirmed. {targetName} is ready to continue.</span>
+              </div>
+            )}
+            {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+          </div>
+        </ToolContent>
+      </Tool>
+    )
+  }
 
   // viewScreen — show status in chat without raw vision image
   if (toolName === "viewScreen") {
@@ -567,6 +662,151 @@ function renderToolPart(part: ToolPartLike, key: string) {
   )
 }
 
+function getBotForMessage(
+  message: UIMessage,
+  index: number,
+  allMessages: UIMessage[],
+  chatBots: Bot[],
+  isGroup: boolean,
+  activeStreamingBot?: Bot | null
+): Bot | null {
+  if (chatBots.length === 0) return null
+  if (!isGroup) return chatBots[0] ?? null
+
+  // 1. Check data-bot part in message.parts
+  const botPart = message.parts.find(
+    (p) =>
+      p.type === "data-bot" ||
+      ((p.type as string) === "data" &&
+        (p as { data?: { type?: string; botId?: string; botName?: string } }).data?.type === "data-bot")
+  ) as
+    | { type: string; data?: { botId?: string; botName?: string } }
+    | undefined
+
+  let botId = botPart?.data?.botId
+  let botName = botPart?.data?.botName
+
+  // 2. Check direct metadata on message
+  const msgMetadata = (message as { metadata?: { botId?: string; botName?: string } }).metadata
+  if (!botId && msgMetadata?.botId) botId = msgMetadata.botId
+  if (!botName && msgMetadata?.botName) botName = msgMetadata.botName
+
+  // 3. Match against chatBots if botId or botName is found
+  if (botId) {
+    const matched = chatBots.find((b) => b.id === botId)
+    if (matched) return matched
+  }
+  if (botName) {
+    const matched = chatBots.find(
+      (b) => b.name.toLowerCase() === botName?.toLowerCase()
+    )
+    if (matched) return matched
+  }
+
+  // 4. Text-based detection from message content (e.g. self-introductions or signatures)
+  const textContent = message.parts
+    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+    .map((p) => p.text)
+    .join("\n")
+
+  if (textContent) {
+    // Check self-identification: "I am **Quill**", "I'm Quill", "This is Quill", "Quill here", "Quill:"
+    for (const b of chatBots) {
+      const esc = b.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      const introPattern = new RegExp(
+        `(?:\\b(?:I am|I'm|This is|My name is|I am called)\\s+(?:\\*\\*)?${esc}(?:\\*\\*)?\\b|^(?:\\*\\*)?${esc}(?:\\*\\*)?:)`,
+        "i"
+      )
+      if (introPattern.test(textContent)) {
+        return b
+      }
+    }
+
+    // Check job/role identification: "as your writing editor", "as a code reviewer"
+    for (const b of chatBots) {
+      if (b.job && b.job.trim().length > 2) {
+        const escJob = b.job.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        const jobPattern = new RegExp(
+          `(?:as (?:your|a|an)\\s+(?:\\*\\*)?${escJob}(?:\\*\\*)?)`,
+          "i"
+        )
+        if (jobPattern.test(textContent)) {
+          return b
+        }
+      }
+    }
+  }
+
+  // 5. Look back at preceding user message to see which bot was targeted
+  if (message.role === "assistant") {
+    for (let j = index - 1; j >= 0; j--) {
+      if (allMessages[j].role === "user") {
+        const prev = allMessages[j]
+        const prevMeta = (prev as { metadata?: { botId?: string; botName?: string } }).metadata
+        const prevBotPart = prev.parts.find((p) => p.type === "data-bot") as
+          | { type: string; data?: { botId?: string; botName?: string } }
+          | undefined
+
+        const targetId = prevMeta?.botId || prevBotPart?.data?.botId
+        const targetName = prevMeta?.botName || prevBotPart?.data?.botName
+
+        if (targetId) {
+          const matched = chatBots.find((b) => b.id === targetId)
+          if (matched) return matched
+        }
+        if (targetName) {
+          const matched = chatBots.find(
+            (b) => b.name.toLowerCase() === targetName.toLowerCase()
+          )
+          if (matched) return matched
+        }
+
+        // Check if user specifically mentioned or addressed a bot by name (e.g. "@Quill" or "Quill, ...")
+        const userText = prev.parts
+          .filter((p): p is { type: "text"; text: string } => p.type === "text")
+          .map((p) => p.text)
+          .join(" ")
+        for (const b of chatBots) {
+          const esc = b.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          if (new RegExp(`(?:^|\\s)@?${esc}\\b`, "i").test(userText)) {
+            return b
+          }
+        }
+        break
+      }
+    }
+
+    // 6. Look back at preceding assistant message in this conversation
+    for (let j = index - 1; j >= 0; j--) {
+      if (allMessages[j].role === "assistant") {
+        const prevText = allMessages[j].parts
+          .filter((p): p is { type: "text"; text: string } => p.type === "text")
+          .map((p) => p.text)
+          .join("\n")
+        for (const b of chatBots) {
+          const esc = b.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          if (
+            new RegExp(
+              `(?:\\b(?:I am|I'm|This is)\\s+(?:\\*\\*)?${esc}(?:\\*\\*)?\\b|^(?:\\*\\*)?${esc}(?:\\*\\*)?:)`,
+              "i"
+            ).test(prevText)
+          ) {
+            return b
+          }
+        }
+      }
+    }
+  }
+
+  // 7. For the currently active streaming turn, use activeStreamingBot
+  if (activeStreamingBot && index === allMessages.length - 1 && message.role === "assistant") {
+    return activeStreamingBot
+  }
+
+  // 8. Stable fallback: always the primary bot in the group, never currentBot
+  return chatBots[0] ?? null
+}
+
 function ChatInner({
   chat,
   initialMessages,
@@ -593,14 +833,60 @@ function ChatInner({
     transport.stopGeneration(chat.id)
   }, [aiStop, transport, chat.id])
 
+  // Automatically switch active composer bot when a hand-off occurs
+  React.useEffect(() => {
+    if (!isGroup) return
+    const lastMsg = messages[messages.length - 1]
+    if (!lastMsg || lastMsg.role !== "assistant") return
+
+    // 1. Check data-handoff part in the latest message
+    const handoffPart = lastMsg.parts.find((p) => p.type === "data-handoff") as
+      | { type: string; data?: { targetBotId?: string } }
+      | undefined
+    if (handoffPart?.data?.targetBotId) {
+      if (handoffPart.data.targetBotId !== selectedBotId) {
+        onSelectBotId(handoffPart.data.targetBotId)
+      }
+      return
+    }
+
+    // 2. Check tool-call part for handOff
+    for (const part of lastMsg.parts) {
+      if (isToolUIPart(part)) {
+        const toolName =
+          "toolName" in part && typeof part.toolName === "string"
+            ? part.toolName
+            : part.type.replace(/^tool-/, "")
+        if (toolName === "handOff" && part.state === "output-available") {
+          const out = part.output as { targetBotId?: string } | undefined
+          if (out?.targetBotId && out.targetBotId !== selectedBotId) {
+            onSelectBotId(out.targetBotId)
+            break
+          }
+        }
+      }
+    }
+  }, [messages, isGroup, selectedBotId, onSelectBotId])
+
   const handleSubmit = React.useCallback(
     ({ text }: { text: string }) => {
       const trimmed = text.trim()
       if (!trimmed) return
       sendMessage(
-        { text: trimmed },
+        {
+          text: trimmed,
+          metadata: {
+            ...clientData,
+            botId: currentBot?.id,
+            botName: currentBot?.name,
+            botJob: currentBot?.job,
+            botInstructions: currentBot?.instructions,
+            sandboxId: currentBot?.sandboxId,
+          },
+        },
         {
           metadata: {
+            ...clientData,
             botId: currentBot?.id,
             botName: currentBot?.name,
             botJob: currentBot?.job,
@@ -610,15 +896,26 @@ function ChatInner({
         }
       )
     },
-    [sendMessage, currentBot]
+    [sendMessage, currentBot, clientData]
   )
 
   const handleSuggestionClick = React.useCallback(
     (suggestion: string) => {
       sendMessage(
-        { text: suggestion },
+        {
+          text: suggestion,
+          metadata: {
+            ...clientData,
+            botId: currentBot?.id,
+            botName: currentBot?.name,
+            botJob: currentBot?.job,
+            botInstructions: currentBot?.instructions,
+            sandboxId: currentBot?.sandboxId,
+          },
+        },
         {
           metadata: {
+            ...clientData,
             botId: currentBot?.id,
             botName: currentBot?.name,
             botJob: currentBot?.job,
@@ -628,7 +925,7 @@ function ChatInner({
         }
       )
     },
-    [sendMessage, currentBot]
+    [sendMessage, currentBot, clientData]
   )
 
   const suggestions = React.useMemo(() => {
@@ -688,8 +985,21 @@ function ChatInner({
               </Suggestions>
             </div>
           ) : (
-            messages.map((message) => {
+            messages.map((message, index) => {
               const isUser = message.role === "user"
+
+              const isStreamingThis =
+                status === "streaming" && index === messages.length - 1
+              const activeStreamingBot = isStreamingThis ? currentBot : null
+
+              // In group chats, resolve the specific bot that authored this message
+              const msgBot = !isUser
+                ? getBotForMessage(message, index, messages, chatBots, isGroup, activeStreamingBot)
+                : null
+
+              const msgAvatarSeed = msgBot?.avatar || msgBot?.name || avatarSeed
+              const msgBotName = msgBot?.name || (isGroup ? "Bot" : botName)
+
               return (
                 <div
                   key={message.id}
@@ -699,47 +1009,65 @@ function ChatInner({
                 >
                   {!isUser && (
                     <ChatAvatar
-                      seed={currentBot?.avatar || currentBot?.name || avatarSeed}
-                      alt={currentBot?.name || botName}
-                      className="size-8 mt-1 shrink-0 rounded-full"
+                      seed={msgAvatarSeed}
+                      alt={msgBotName}
+                      className={cn(
+                        "size-8 shrink-0 rounded-full",
+                        isGroup ? "mt-0.5" : "mt-1"
+                      )}
                     />
                   )}
 
-                  <Message from={message.role} className="max-w-[85%]">
-                    <MessageContent>
-                      {message.parts.map((part, i) => {
-                        const partKey = `${message.id}-${i}`
-                        if (part.type === "text") {
-                          return (
-                            <MessageResponse key={partKey}>
-                              {part.text}
-                            </MessageResponse>
-                          )
-                        }
-                        if (isToolUIPart(part)) {
-                          const toolName =
-                            "toolName" in part && typeof part.toolName === "string"
-                              ? part.toolName
-                              : part.type.replace(/^tool-/, "")
-                          return renderToolPart(
-                            {
-                              type: part.type,
-                              toolName,
-                              state: part.state,
-                              input: (part.input as Record<string, unknown>) ?? {},
-                              output: "output" in part ? part.output : undefined,
-                              errorText:
-                                "errorText" in part
-                                   ? (part.errorText as string)
-                                  : undefined,
-                            },
-                            partKey
-                          )
-                        }
-                        return null
-                      })}
-                    </MessageContent>
-                  </Message>
+                  <div className={cn("flex flex-col gap-1 max-w-[85%] min-w-0", isUser && "items-end")}>
+                    {!isUser && isGroup && (
+                      <div className="flex items-center gap-2 leading-none pb-0.5">
+                        <span className="text-xs font-semibold text-foreground">
+                          {msgBotName}
+                        </span>
+                        {msgBot?.job && (
+                          <span className="text-[11px] text-muted-foreground/80 font-normal">
+                            · {msgBot.job}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <Message from={message.role} className="w-full">
+                      <MessageContent>
+                        {message.parts.map((part, i) => {
+                          const partKey = `${message.id}-${i}`
+                          if (part.type === "text") {
+                            return (
+                              <MessageResponse key={partKey}>
+                                {part.text}
+                              </MessageResponse>
+                            )
+                          }
+                          if (isToolUIPart(part)) {
+                            const toolName =
+                              "toolName" in part && typeof part.toolName === "string"
+                                ? part.toolName
+                                : part.type.replace(/^tool-/, "")
+                            return renderToolPart(
+                              {
+                                type: part.type,
+                                toolName,
+                                state: part.state,
+                                input: (part.input as Record<string, unknown>) ?? {},
+                                output: "output" in part ? part.output : undefined,
+                                errorText:
+                                  "errorText" in part
+                                    ? (part.errorText as string)
+                                    : undefined,
+                              },
+                              partKey
+                            )
+                          }
+                          return null
+                        })}
+                      </MessageContent>
+                    </Message>
+                  </div>
                 </div>
               )
             })

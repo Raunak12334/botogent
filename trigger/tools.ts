@@ -8,6 +8,7 @@
 
 import { tool } from "ai";
 import { z } from "zod";
+import { chat } from "@trigger.dev/sdk/ai";
 import { getDaytonaClient } from "@/lib/daytona";
 import type { Sandbox } from "@daytona/sdk";
 
@@ -410,3 +411,181 @@ export function createSandboxTools(boundSandboxId?: string | null) {
 
 export const sandboxTools = createSandboxTools();
 export type SandboxTools = ReturnType<typeof createSandboxTools>;
+
+// ---------------------------------------------------------------------------
+// Group Chat Collaboration & Hand-Off Tool
+// ---------------------------------------------------------------------------
+
+export type HandOffAvailableBot = {
+  id: string;
+  name: string;
+  job?: string | null;
+  instructions?: string | null;
+  avatar?: string | null;
+  sandboxId?: string | null;
+};
+
+export type HandOffToolOptions = {
+  currentBotId?: string;
+  currentBotName?: string;
+  availableBots?: HandOffAvailableBot[];
+  onHandOff?: (event: {
+    fromBotId?: string;
+    fromBotName?: string;
+    targetBotId: string;
+    targetBotName: string;
+    targetBotJob?: string;
+    targetBotAvatar?: string;
+    reason: string;
+    context?: string;
+  }) => void;
+};
+
+export function createHandOffTool(options?: HandOffToolOptions) {
+  const currentBotId = options?.currentBotId;
+  const currentBotName = options?.currentBotName || "Assistant";
+  const availableBots = options?.availableBots ?? [];
+
+  const teammates = availableBots.filter(
+    (b) =>
+      b.id !== currentBotId &&
+      b.name.toLowerCase() !== currentBotName.toLowerCase()
+  );
+
+  const teammateNames = teammates.map((b) => b.name);
+  const teammateListStr =
+    teammates.length > 0
+      ? teammates
+          .map((b) => `• "${b.name}" (${b.job || "AI Specialist"})`)
+          .join(", ")
+      : "No other teammates registered in this chat";
+
+  return tool({
+    description:
+      `Delegate or hand off the current task/conversation to another AI teammate in this group chat if the user's prompt is outside your domain and better suited for them. ` +
+      `Available teammates in this group chat: ${teammateListStr}.`,
+    inputSchema: z.object({
+      targetBotName: z
+        .string()
+        .describe(
+          `The exact name of the teammate to hand off to. Must match one of: ${
+            teammateNames.length > 0 ? teammateNames.join(", ") : "None"
+          }`
+        ),
+      reason: z
+        .string()
+        .describe(
+          "Clear explanation of why this teammate is better suited for the user's request (e.g. domain expertise, specific task requirements)"
+        ),
+      context: z
+        .string()
+        .optional()
+        .describe(
+          "Summary of the user's prompt, requirements, or progress so far for the target teammate to reference"
+        ),
+    }),
+    execute: async ({ targetBotName, reason, context }) => {
+      const cleanTargetName = targetBotName.trim();
+      const target = teammates.find(
+        (b) =>
+          b.name.toLowerCase() === cleanTargetName.toLowerCase() ||
+          cleanTargetName.toLowerCase().includes(b.name.toLowerCase()) ||
+          b.name.toLowerCase().includes(cleanTargetName.toLowerCase())
+      );
+
+      if (!target) {
+        return {
+          success: false,
+          error: `Teammate "${targetBotName}" was not found in this group chat. Valid teammates are: ${
+            teammateNames.length > 0 ? teammateNames.join(", ") : "None"
+          }`,
+        };
+      }
+
+      const handoffEvent = {
+        fromBotId: currentBotId,
+        fromBotName: currentBotName,
+        targetBotId: target.id,
+        targetBotName: target.name,
+        targetBotJob: target.job ?? undefined,
+        targetBotAvatar: target.avatar ?? target.name,
+        reason,
+        context,
+      };
+
+      if (options?.onHandOff) {
+        try {
+          options.onHandOff(handoffEvent);
+        } catch (err) {
+          console.warn("[handOff] onHandOff callback error:", err);
+        }
+      }
+
+      return {
+        success: true,
+        targetBotId: target.id,
+        targetBotName: target.name,
+        targetBotJob: target.job || "Specialist",
+        targetBotAvatar: target.avatar || target.name,
+        fromBotName: currentBotName,
+        reason,
+        context: context || "Task handed off to specialist teammate.",
+        message: `Task successfully handed off to ${target.name} (${target.job || "Specialist"}). You should now briefly and courteously introduce the hand-off to the user in your response, addressing the teammate as @${target.name}.`,
+      };
+    },
+  });
+}
+
+export type AgentToolsOptions = {
+  sandboxId?: string | null;
+  botId?: string;
+  botName?: string;
+  isGroup?: boolean;
+  availableBots?: HandOffAvailableBot[];
+};
+
+export function createAgentTools(options?: AgentToolsOptions) {
+  const sandbox = createSandboxTools(options?.sandboxId);
+  const isGroup =
+    Boolean(options?.isGroup) ||
+    Boolean(options?.availableBots && options.availableBots.length > 1);
+
+  const availableBots = options?.availableBots ?? [];
+  const teammates = availableBots.filter(
+    (b) =>
+      b.id !== options?.botId &&
+      b.name.toLowerCase() !== (options?.botName || "").toLowerCase()
+  );
+
+  if (isGroup && teammates.length > 0) {
+    const handOff = createHandOffTool({
+      currentBotId: options?.botId,
+      currentBotName: options?.botName,
+      availableBots: options?.availableBots,
+      onHandOff: (event) => {
+        try {
+          chat.response.write({
+            type: "data-handoff",
+            data: event,
+          });
+        } catch (err) {
+          console.warn("[createAgentTools] chat.response.write warning:", err);
+        }
+      },
+    });
+
+    return {
+      ...sandbox,
+      handOff,
+    };
+  }
+
+  const fallbackHandOff = createHandOffTool();
+  return {
+    ...sandbox,
+    handOff: fallbackHandOff,
+  };
+}
+
+export const agentTools = createAgentTools();
+export type AgentTools = ReturnType<typeof createAgentTools>;
