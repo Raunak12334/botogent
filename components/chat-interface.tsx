@@ -24,6 +24,10 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
+  PromptInputSelect,
+  PromptInputSelectTrigger,
+  PromptInputSelectContent,
+  PromptInputSelectItem,
 } from "@/components/ai-elements/prompt-input"
 import {
   Suggestion,
@@ -44,8 +48,11 @@ import {
   TerminalContent as TerminalBody,
 } from "@/components/ai-elements/terminal"
 import { ChatAvatar } from "@/components/chat-avatar"
+import { GroupChatAvatar } from "@/components/group-chat-avatar"
+import { cn } from "@/lib/utils"
 import type { ChatWithMembers } from "@/queries/chats"
 import type { chatAgent, ChatAgentClientData } from "@/trigger/chat"
+import type { Bot } from "@/lib/db/schema"
 import {
   mintChatAccessToken,
   startChatSession,
@@ -69,25 +76,60 @@ interface ChatInterfaceProps {
 }
 
 export function ChatInterface({ chat }: ChatInterfaceProps) {
-  const bot = chat.members?.[0]?.bot ?? chat.bot ?? null
-  const botName = chat.name || bot?.name || "AI Assistant"
-  const avatarSeed = bot?.avatar || bot?.name || "Ada"
-  const botJob = bot?.job
+  const isGroup =
+    chat.kind === "group" ||
+    (chat.bots && chat.bots.length > 1) ||
+    (chat.members && chat.members.length > 1)
+
+  const chatBots = React.useMemo<Bot[]>(() => {
+    if (chat.bots && chat.bots.length > 0) return chat.bots
+    if (chat.members && chat.members.length > 0) {
+      return chat.members.map((m) => m.bot).filter((b): b is Bot => b != null)
+    }
+    return chat.bot ? [chat.bot] : []
+  }, [chat])
+
+  const [selectedBotId, setSelectedBotId] = React.useState<string>(
+    () => chatBots[0]?.id || chat.bot?.id || ""
+  )
+
+  React.useEffect(() => {
+    if (chatBots.length > 0 && !chatBots.some((b) => b.id === selectedBotId)) {
+      setSelectedBotId(chatBots[0].id)
+    }
+  }, [chatBots, selectedBotId])
+
+  const currentBot = React.useMemo(() => {
+    return chatBots.find((b) => b.id === selectedBotId) ?? chatBots[0] ?? chat.bot ?? null
+  }, [chatBots, selectedBotId, chat.bot])
+
+  const botName = isGroup
+    ? chat.name || "Group Chat"
+    : (currentBot?.name || chat.name || "AI Assistant")
+  const avatarSeed = currentBot?.avatar || currentBot?.name || "Ada"
+  const botJob = currentBot?.job
 
   const clientData = React.useMemo<ChatAgentClientData>(() => {
     return {
-      botName: bot?.name || botName,
-      botJob: bot?.job,
-      botInstructions: bot?.instructions,
-      sandboxId: bot?.sandboxId,
+      botId: currentBot?.id,
+      botName: currentBot?.name || "AI Assistant",
+      botJob: currentBot?.job,
+      botInstructions: currentBot?.instructions,
+      sandboxId: currentBot?.sandboxId,
     }
-  }, [bot, botName])
+  }, [currentBot])
 
   const transport = useTriggerChatTransport<typeof chatAgent>({
     task: "chat-agent",
     accessToken: ({ chatId }) => mintChatAccessToken(chatId),
-    startSession: ({ chatId, clientData }) =>
-      startChatSession({ chatId, clientData }),
+    startSession: ({ chatId, clientData: sessionClientData }) =>
+      startChatSession({
+        chatId,
+        clientData: {
+          ...clientData,
+          ...sessionClientData,
+        },
+      }),
     clientData,
   })
 
@@ -98,15 +140,24 @@ export function ChatInterface({ chat }: ChatInterfaceProps) {
   )
 
   if (isLoading) {
+    const groupSeeds = chatBots.map((b) => b.avatar || b.name)
     return (
       <div className="flex flex-1 min-h-0 flex-col overflow-hidden bg-background">
         <Conversation className="flex-1 min-h-0">
           <ConversationContent className="mx-auto flex w-full max-w-3xl flex-col items-center justify-center my-auto py-12 gap-4 text-center">
-            <ChatAvatar
-              seed={avatarSeed}
-              alt={botName}
-              className="size-16 rounded-full shadow-sm ring-2 ring-border/50 animate-pulse"
-            />
+            {isGroup && groupSeeds.length > 1 ? (
+              <GroupChatAvatar
+                seeds={groupSeeds}
+                sizeClassName="size-16"
+                className="rounded-full shadow-sm ring-2 ring-border/50 animate-pulse"
+              />
+            ) : (
+              <ChatAvatar
+                seed={avatarSeed}
+                alt={botName}
+                className="size-16 rounded-full shadow-sm ring-2 ring-border/50 animate-pulse"
+              />
+            )}
             <div className="text-sm text-muted-foreground font-medium">
               <Shimmer>Loading conversation...</Shimmer>
             </div>
@@ -122,9 +173,15 @@ export function ChatInterface({ chat }: ChatInterfaceProps) {
       chat={chat}
       initialMessages={initialMessages}
       transport={transport}
+      isGroup={isGroup}
+      chatBots={chatBots}
+      selectedBotId={selectedBotId}
+      onSelectBotId={setSelectedBotId}
+      currentBot={currentBot}
       botName={botName}
       avatarSeed={avatarSeed}
       botJob={botJob}
+      clientData={clientData}
     />
   )
 }
@@ -133,9 +190,15 @@ interface ChatInnerProps {
   chat: ChatWithMembers
   initialMessages: UIMessage[]
   transport: ReturnType<typeof useTriggerChatTransport<typeof chatAgent>>
+  isGroup: boolean
+  chatBots: Bot[]
+  selectedBotId: string
+  onSelectBotId: (id: string) => void
+  currentBot: Bot | null
   botName: string
   avatarSeed: string
   botJob?: string | null
+  clientData: ChatAgentClientData
 }
 
 // ---------------------------------------------------------------------------
@@ -201,51 +264,86 @@ function renderToolPart(part: ToolPartLike, key: string) {
           toolName="bash"
         />
         <ToolContent>
-          <Terminal output={stdout ?? ""} isStreaming={state === "input-available"}>
-            <TerminalHeader>
-              <TerminalTitle>$ {command}</TerminalTitle>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-950 p-3 font-mono text-xs text-neutral-100 shadow-inner">
+            <div className="flex items-center gap-2 text-neutral-400 mb-2 border-b border-neutral-800 pb-1.5">
+              <TerminalIcon className="size-3.5 text-emerald-400 shrink-0" />
+              <span className="font-semibold text-neutral-200">Terminal</span>
               {exitCode !== undefined && (
-                <span className={`text-xs font-mono ${exitCode === 0 ? "text-green-400" : "text-red-400"}`}>
+                <span
+                  className={cn(
+                    "ml-auto text-[10px] px-1.5 py-0.5 rounded",
+                    exitCode === 0
+                      ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
+                      : "bg-rose-950 text-rose-400 border border-rose-800"
+                  )}
+                >
                   exit {exitCode}
                 </span>
               )}
-            </TerminalHeader>
-            <TerminalBody />
-          </Terminal>
-          {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+            </div>
+            <div className="flex gap-2 text-neutral-300 font-semibold mb-2">
+              <span className="text-emerald-400 select-none">$</span>
+              <span className="break-all">{command}</span>
+            </div>
+            {stdout && (
+              <pre className="mt-2 max-h-60 overflow-y-auto whitespace-pre-wrap rounded bg-neutral-900/70 p-2 text-[11px] text-neutral-300">
+                {stdout}
+              </pre>
+            )}
+            {part.errorText && (
+              <div className="mt-2 rounded bg-rose-950/60 border border-rose-800/80 p-2 text-[11px] text-rose-300">
+                {part.errorText}
+              </div>
+            )}
+          </div>
         </ToolContent>
       </Tool>
     )
   }
 
-  // showScreen — render the screenshot inline
+  // showScreen — render user-visible screenshot directly in chat
   if (toolName === "showScreen") {
-    const dataUri = output ? (output as { dataUri?: string }).dataUri : undefined
-    const caption = output ? (output as { caption?: string }).caption : undefined
+    const caption = typeof input.caption === "string" ? input.caption : undefined
+    const outputData = output as { imageUrl?: string; base64?: string; mimeType?: string } | undefined
+    const imageSrc =
+      outputData?.imageUrl ||
+      (outputData?.base64
+        ? `data:${outputData.mimeType || "image/png"};base64,${outputData.base64}`
+        : undefined)
+
     return (
       <Tool key={key} defaultOpen>
         <ToolHeader
           type="dynamic-tool"
           state={state}
-          title={caption ?? "Screen"}
+          title={caption || "Desktop Screenshot"}
           toolName="showScreen"
         />
         <ToolContent>
-          {dataUri ? (
-            <div className="space-y-2">
-              <img
-                src={dataUri}
-                alt={caption ?? "Sandbox screen"}
-                className="w-full rounded-md border border-border/50 shadow-sm"
-              />
-              {caption && (
-                <p className="text-xs text-muted-foreground text-center">{caption}</p>
-              )}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground italic">Screenshot unavailable</p>
-          )}
-          {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+          <div className="space-y-2">
+            {imageSrc ? (
+              <div className="overflow-hidden rounded-lg border border-border bg-neutral-950 shadow-md">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={imageSrc}
+                  alt={caption || "Desktop Screenshot"}
+                  className="w-full h-auto object-contain max-h-[480px]"
+                />
+                {caption && (
+                  <div className="px-3 py-1.5 text-xs text-neutral-400 bg-neutral-900 border-t border-neutral-800 flex items-center gap-1.5">
+                    <MonitorIcon className="size-3.5 text-primary shrink-0" />
+                    <span>{caption}</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground bg-muted/30 rounded-md">
+                <MonitorIcon className="size-4 shrink-0 text-primary/70 animate-pulse" />
+                <span>Capturing screenshot...</span>
+              </div>
+            )}
+            {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+          </div>
         </ToolContent>
       </Tool>
     )
@@ -253,30 +351,29 @@ function renderToolPart(part: ToolPartLike, key: string) {
 
   // readFile
   if (toolName === "readFile") {
-    const filePath = String(input.path ?? "")
-    const content = output ? (output as { content?: string }).content : undefined
+    const path = String(input.path ?? "")
+    const content = output ? String((output as { content?: string }).content ?? "") : undefined
     return (
       <Tool key={key}>
         <ToolHeader
           type="dynamic-tool"
           state={state}
-          title={filePath}
+          title={path ? `Read ${path}` : "Read file"}
           toolName="readFile"
         />
         <ToolContent>
-          {content !== undefined ? (
-            <div className="space-y-2">
-              <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-                {filePath}
-              </h4>
-              <pre className="max-h-64 overflow-auto rounded-md bg-muted/50 p-3 text-xs font-mono whitespace-pre-wrap">
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <FileTextIcon className="size-3.5 shrink-0" />
+              <code className="text-[11px] font-mono">{path}</code>
+            </div>
+            {content !== undefined && (
+              <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded bg-muted/40 p-2 font-mono text-[11px] text-foreground border border-border/50">
                 {content}
               </pre>
-            </div>
-          ) : (
-            <ToolInput input={input} />
-          )}
-          <ToolOutput output={output} errorText={part.errorText} />
+            )}
+            {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+          </div>
         </ToolContent>
       </Tool>
     )
@@ -284,18 +381,28 @@ function renderToolPart(part: ToolPartLike, key: string) {
 
   // writeFile
   if (toolName === "writeFile") {
-    const filePath = String(input.path ?? "")
+    const path = String(input.path ?? "")
     return (
       <Tool key={key}>
         <ToolHeader
           type="dynamic-tool"
           state={state}
-          title={filePath}
+          title={path ? `Write ${path}` : "Write file"}
           toolName="writeFile"
         />
         <ToolContent>
-          <ToolInput input={{ path: filePath, content: input.content }} />
-          <ToolOutput output={output} errorText={part.errorText} />
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <PencilIcon className="size-3.5 shrink-0 text-emerald-500" />
+              <code className="text-[11px] font-mono">{path}</code>
+              {state === "output-available" && (
+                <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-emerald-500 font-medium">
+                  <CheckIcon className="size-3" /> saved
+                </span>
+              )}
+            </div>
+            {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+          </div>
         </ToolContent>
       </Tool>
     )
@@ -303,41 +410,38 @@ function renderToolPart(part: ToolPartLike, key: string) {
 
   // listFiles
   if (toolName === "listFiles") {
-    const dirPath = String(input.path ?? "/home/daytona")
-    const entries = output
-      ? (output as { entries?: { name: string; type: string; size?: number }[] }).entries ?? []
-      : []
+    const path = String(input.path ?? ".")
+    const entries = output ? (output as { entries?: Array<{ name: string; isDir?: boolean }> }).entries : undefined
     return (
       <Tool key={key}>
         <ToolHeader
           type="dynamic-tool"
           state={state}
-          title={dirPath}
+          title={path ? `List ${path}` : "List directory"}
           toolName="listFiles"
         />
         <ToolContent>
-          {entries.length > 0 ? (
-            <div className="rounded-md border border-border/50 divide-y divide-border/30 overflow-hidden text-xs font-mono">
-              {entries.map((e) => (
-                <div key={e.name} className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 hover:bg-muted/60 transition-colors">
-                  {e.type === "directory" ? (
-                    <FolderIcon className="size-3.5 text-blue-500 shrink-0" />
-                  ) : (
-                    <FileTextIcon className="size-3.5 text-muted-foreground shrink-0" />
-                  )}
-                  <span>{e.name}</span>
-                  {e.size !== undefined && (
-                    <span className="ml-auto text-muted-foreground">
-                      {e.size < 1024 ? `${e.size}B` : `${(e.size / 1024).toFixed(1)}KB`}
-                    </span>
-                  )}
-                </div>
-              ))}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <FolderIcon className="size-3.5 shrink-0 text-amber-500" />
+              <code className="text-[11px] font-mono">{path}</code>
             </div>
-          ) : (
-            <ToolInput input={input} />
-          )}
-          <ToolOutput output={output} errorText={part.errorText} />
+            {entries && (
+              <div className="grid grid-cols-2 gap-1 rounded bg-muted/40 p-2 font-mono text-[11px] text-foreground border border-border/50">
+                {entries.map((e, idx) => (
+                  <div key={idx} className="flex items-center gap-1.5 truncate">
+                    {e.isDir ? (
+                      <FolderIcon className="size-3 text-amber-500 shrink-0" />
+                    ) : (
+                      <FileTextIcon className="size-3 text-muted-foreground shrink-0" />
+                    )}
+                    <span className="truncate">{e.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
+          </div>
         </ToolContent>
       </Tool>
     )
@@ -345,18 +449,23 @@ function renderToolPart(part: ToolPartLike, key: string) {
 
   // mouseClick
   if (toolName === "mouseClick") {
-    const { x, y, button = "left", double: dbl } = input as { x: number; y: number; button?: string; double?: boolean }
+    const x = input.x !== undefined ? String(input.x) : "?"
+    const y = input.y !== undefined ? String(input.y) : "?"
+    const button = input.button ? ` (${input.button})` : ""
     return (
       <Tool key={key}>
         <ToolHeader
           type="dynamic-tool"
           state={state}
-          title={`${dbl ? "double-" : ""}${button} click at (${x}, ${y})`}
+          title={`Click at (${x}, ${y})${button}`}
           toolName="mouseClick"
         />
         <ToolContent>
-          <ToolInput input={{ x, y, button, double: dbl }} />
-          <ToolOutput output={output} errorText={part.errorText} />
+          <div className="flex items-center gap-2 p-2 text-xs text-muted-foreground bg-muted/20 rounded">
+            <MousePointerIcon className="size-3.5 text-primary" />
+            <span>Mouse clicked at coordinates ({x}, {y})</span>
+          </div>
+          {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
         </ToolContent>
       </Tool>
     )
@@ -364,13 +473,14 @@ function renderToolPart(part: ToolPartLike, key: string) {
 
   // mouseMove
   if (toolName === "mouseMove") {
-    const { x, y } = input as { x: number; y: number }
+    const x = input.x !== undefined ? String(input.x) : "?"
+    const y = input.y !== undefined ? String(input.y) : "?"
     return (
       <Tool key={key}>
         <ToolHeader
           type="dynamic-tool"
           state={state}
-          title={`Move to (${x}, ${y})`}
+          title={`Move mouse to (${x}, ${y})`}
           toolName="mouseMove"
         />
         <ToolContent>
@@ -383,13 +493,13 @@ function renderToolPart(part: ToolPartLike, key: string) {
 
   // mouseScroll
   if (toolName === "mouseScroll") {
-    const { x, y, direction, amount } = input as { x: number; y: number; direction: string; amount: number }
+    const dy = input.dy !== undefined ? String(input.dy) : "?"
     return (
       <Tool key={key}>
         <ToolHeader
           type="dynamic-tool"
           state={state}
-          title={`Scroll ${direction} ×${amount} at (${x}, ${y})`}
+          title={`Scroll mouse (${dy})`}
           toolName="mouseScroll"
         />
         <ToolContent>
@@ -408,12 +518,15 @@ function renderToolPart(part: ToolPartLike, key: string) {
         <ToolHeader
           type="dynamic-tool"
           state={state}
-          title={text.length > 50 ? `"${text.slice(0, 50)}…"` : `"${text}"`}
+          title={text.length > 40 ? `Type "${text.slice(0, 40)}…"` : `Type "${text}"`}
           toolName="keyboardType"
         />
         <ToolContent>
-          <ToolInput input={{ text }} />
-          <ToolOutput output={output} errorText={part.errorText} />
+          <div className="flex items-center gap-2 p-2 text-xs text-muted-foreground bg-muted/20 rounded font-mono">
+            <KeyboardIcon className="size-3.5 text-primary shrink-0" />
+            <span className="truncate">Typed: &ldquo;{text}&rdquo;</span>
+          </div>
+          {part.errorText && <ToolOutput output={output} errorText={part.errorText} />}
         </ToolContent>
       </Tool>
     )
@@ -421,7 +534,7 @@ function renderToolPart(part: ToolPartLike, key: string) {
 
   // keyboardPress
   if (toolName === "keyboardPress") {
-    const keyLabel = String(input.hotkey ?? input.key ?? "")
+    const keyLabel = String(input.key ?? "key")
     return (
       <Tool key={key}>
         <ToolHeader
@@ -458,9 +571,15 @@ function ChatInner({
   chat,
   initialMessages,
   transport,
+  isGroup,
+  chatBots,
+  selectedBotId,
+  onSelectBotId,
+  currentBot,
   botName,
   avatarSeed,
   botJob,
+  clientData,
 }: ChatInnerProps) {
   const { messages, sendMessage, status, stop: aiStop, error, regenerate } = useChat({
     id: chat.id,
@@ -478,16 +597,38 @@ function ChatInner({
     ({ text }: { text: string }) => {
       const trimmed = text.trim()
       if (!trimmed) return
-      sendMessage({ text: trimmed })
+      sendMessage(
+        { text: trimmed },
+        {
+          metadata: {
+            botId: currentBot?.id,
+            botName: currentBot?.name,
+            botJob: currentBot?.job,
+            botInstructions: currentBot?.instructions,
+            sandboxId: currentBot?.sandboxId,
+          },
+        }
+      )
     },
-    [sendMessage]
+    [sendMessage, currentBot]
   )
 
   const handleSuggestionClick = React.useCallback(
     (suggestion: string) => {
-      sendMessage({ text: suggestion })
+      sendMessage(
+        { text: suggestion },
+        {
+          metadata: {
+            botId: currentBot?.id,
+            botName: currentBot?.name,
+            botJob: currentBot?.job,
+            botInstructions: currentBot?.instructions,
+            sandboxId: currentBot?.sandboxId,
+          },
+        }
+      )
     },
-    [sendMessage]
+    [sendMessage, currentBot]
   )
 
   const suggestions = React.useMemo(() => {
@@ -513,17 +654,27 @@ function ChatInner({
             <div className="flex flex-col items-center justify-center my-auto py-12 gap-6 text-center">
               <ConversationEmptyState
                 icon={
-                  <ChatAvatar
-                    seed={avatarSeed}
-                    alt={botName}
-                    className="size-16 rounded-full shadow-sm ring-2 ring-border/50"
-                  />
+                  isGroup && chatBots.length > 1 ? (
+                    <GroupChatAvatar
+                      seeds={chatBots.map((b) => b.avatar || b.name)}
+                      sizeClassName="size-16"
+                      className="rounded-full shadow-sm ring-2 ring-border/50"
+                    />
+                  ) : (
+                    <ChatAvatar
+                      seed={avatarSeed}
+                      alt={botName}
+                      className="size-16 rounded-full shadow-sm ring-2 ring-border/50"
+                    />
+                  )
                 }
-                title={`Chat with ${botName}`}
+                title={isGroup ? (chat.name || "Group Chat") : `Chat with ${botName}`}
                 description={
-                  botJob
-                    ? `${botJob} · Ready to assist you`
-                    : "Ready to assist you with your questions"
+                  isGroup
+                    ? `Group chat with ${chatBots.map((b) => b.name).join(", ")}`
+                    : botJob
+                      ? `${botJob} · Ready to assist you`
+                      : "Ready to assist you with your questions"
                 }
               />
               <Suggestions className="justify-center flex-wrap max-w-xl">
@@ -548,8 +699,8 @@ function ChatInner({
                 >
                   {!isUser && (
                     <ChatAvatar
-                      seed={avatarSeed}
-                      alt={botName}
+                      seed={currentBot?.avatar || currentBot?.name || avatarSeed}
+                      alt={currentBot?.name || botName}
                       className="size-8 mt-1 shrink-0 rounded-full"
                     />
                   )}
@@ -579,7 +730,7 @@ function ChatInner({
                               output: "output" in part ? part.output : undefined,
                               errorText:
                                 "errorText" in part
-                                  ? (part.errorText as string)
+                                   ? (part.errorText as string)
                                   : undefined,
                             },
                             partKey
@@ -597,12 +748,14 @@ function ChatInner({
           {status === "submitted" && (
             <div className="flex gap-3 items-center text-sm text-muted-foreground">
               <ChatAvatar
-                seed={avatarSeed}
-                alt={botName}
+                seed={currentBot?.avatar || currentBot?.name || avatarSeed}
+                alt={currentBot?.name || botName}
                 className="size-8 shrink-0 rounded-full"
               />
               <div className="rounded-lg bg-secondary/60 px-3.5 py-2 text-xs font-medium">
-                <Shimmer>Thinking...</Shimmer>
+                <Shimmer>
+                  {currentBot ? `${currentBot.name} is thinking...` : "Thinking..."}
+                </Shimmer>
               </div>
             </div>
           )}
@@ -626,11 +779,58 @@ function ChatInner({
       <div className="mx-auto w-full max-w-3xl p-4 pt-0 shrink-0">
         <PromptInput onSubmit={handleSubmit}>
           <PromptInputTextarea
-            placeholder={`Message ${botName}...`}
+            placeholder={
+              isGroup && currentBot
+                ? `Message ${currentBot.name}...`
+                : `Message ${botName}...`
+            }
             className="min-h-16"
           />
           <PromptInputFooter>
-            <PromptInputTools />
+            <PromptInputTools>
+              {isGroup && chatBots.length > 0 && (
+                <PromptInputSelect
+                  value={selectedBotId}
+                  onValueChange={(val) => {
+                    if (typeof val === "string") onSelectBotId(val)
+                  }}
+                >
+                  <PromptInputSelectTrigger className="h-8 gap-2 rounded-md border border-input/40 bg-muted/30 px-2.5 py-1 text-xs hover:bg-muted/60 transition-colors">
+                    <ChatAvatar
+                      seed={currentBot?.avatar || currentBot?.name || "Ada"}
+                      className="size-4 shrink-0 rounded-full"
+                    />
+                    <span className="truncate max-w-[120px] font-medium text-foreground">
+                      {currentBot?.name || "Select bot"}
+                    </span>
+                  </PromptInputSelectTrigger>
+                  <PromptInputSelectContent align="start" className="min-w-44">
+                    {chatBots.map((b) => (
+                      <PromptInputSelectItem
+                        key={b.id}
+                        value={b.id}
+                        className="cursor-pointer gap-2 py-1.5 text-xs"
+                      >
+                        <ChatAvatar
+                          seed={b.avatar || b.name}
+                          className="size-5 shrink-0 rounded-full"
+                        />
+                        <div className="flex flex-col min-w-0">
+                          <span className="truncate font-medium text-foreground">
+                            {b.name}
+                          </span>
+                          {b.job && (
+                            <span className="truncate text-[10px] text-muted-foreground">
+                              {b.job}
+                            </span>
+                          )}
+                        </div>
+                      </PromptInputSelectItem>
+                    ))}
+                  </PromptInputSelectContent>
+                </PromptInputSelect>
+              )}
+            </PromptInputTools>
             <PromptInputSubmit status={status} onStop={handleStop} />
           </PromptInputFooter>
         </PromptInput>

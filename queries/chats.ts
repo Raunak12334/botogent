@@ -15,12 +15,14 @@ export type ChatMemberWithBot = ChatMember & {
 export type ChatWithMembers = Chat & {
   bot: Bot | null;
   members: ChatMemberWithBot[];
+  /** All member bots for the chat (convenience for group chats) */
+  bots: Bot[];
 };
 
 /**
  * Retrieves a chat by its ID for the currently authenticated Clerk user.
  * Scoped to Clerk's user ID.
- * Populates members and falls back to the first bot member.
+ * Populates members and all bots.
  */
 export async function getChat(chatId: string): Promise<ChatWithMembers | null> {
   const { userId } = await auth();
@@ -44,11 +46,15 @@ export async function getChat(chatId: string): Promise<ChatWithMembers | null> {
     return null;
   }
 
-  const firstBot = chat.members[0]?.bot ?? null;
+  const memberBots = chat.members
+    .map((m) => m.bot)
+    .filter((b): b is Bot => b != null);
+  const firstBot = memberBots[0] ?? null;
 
   return {
     ...chat,
     bot: firstBot,
+    bots: memberBots,
   };
 }
 

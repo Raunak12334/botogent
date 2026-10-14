@@ -28,13 +28,15 @@ export default async function ChatPage({
   await auth.protect()
 
   const { chatId } = await params
-  const { desktop } = (await searchParams) || {}
-  const isDesktopOpen = desktop === "true" || desktop === "open"
   const chat = await getChat(chatId)
 
   if (!chat) {
     notFound()
   }
+
+  const { desktop } = (await searchParams) || {}
+  const isGroup = chat.kind === "group" || (chat.bots && chat.bots.length > 1)
+  const isDesktopOpen = !isGroup && (desktop === "true" || desktop === "open")
 
   const bot = chat.members?.[0]?.bot ?? chat.bot ?? null
   const botName = chat.name || bot?.name || "Bot"

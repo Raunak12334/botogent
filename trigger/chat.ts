@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createSandboxTools, sandboxTools } from "./tools";
 
 export const chatAgentClientDataSchema = z.object({
+  botId: z.string().optional(),
   botName: z.string().optional(),
   botJob: z.string().optional(),
   botInstructions: z.string().nullable().optional(),
@@ -93,7 +94,7 @@ export const chatAgent = chat.agent({
     const instructions = buildAgentInstructions(clientData);
 
     return streamText({
-      model: google("gemini-2.5-flash"),
+      model: google("gemini-3.8-flash"),
       instructions,
       messages,
       tools,

@@ -28,13 +28,16 @@ export async function startChatSession(params: {
     throw new Error('Chat not found or access denied');
   }
 
-  const bot = existingChat.bot;
+  const selectedBot = params.clientData?.botId
+    ? existingChat.bots.find((b) => b.id === params.clientData?.botId) ?? existingChat.bot
+    : existingChat.bot;
 
   const mergedClientData: ChatAgentClientData = {
-    botName: bot?.name ?? params.clientData?.botName,
-    botJob: bot?.job ?? params.clientData?.botJob,
-    botInstructions: bot?.instructions ?? params.clientData?.botInstructions,
-    sandboxId: bot?.sandboxId ?? params.clientData?.sandboxId,
+    botId: selectedBot?.id ?? params.clientData?.botId,
+    botName: params.clientData?.botName ?? selectedBot?.name,
+    botJob: params.clientData?.botJob ?? selectedBot?.job,
+    botInstructions: params.clientData?.botInstructions ?? selectedBot?.instructions,
+    sandboxId: params.clientData?.sandboxId ?? selectedBot?.sandboxId,
     instructions: params.clientData?.instructions,
   };
 

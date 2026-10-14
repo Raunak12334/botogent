@@ -6,6 +6,7 @@ import { Box, Monitor, MoreVertical, Trash2, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ChatAvatar } from "@/components/chat-avatar"
+import { GroupChatAvatar } from "@/components/group-chat-avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +37,7 @@ export interface ChatHeaderProps extends React.ComponentProps<"header"> {
     | UserChat
     | {
         id: string
+        kind?: "individual" | "group"
         name?: string | null
         bot?: {
           id: string
@@ -43,6 +45,12 @@ export interface ChatHeaderProps extends React.ComponentProps<"header"> {
           avatar?: string | null
           sandboxId?: string | null
         } | null
+        bots?: Array<{
+          id: string
+          name: string
+          avatar?: string | null
+          sandboxId?: string | null
+        }>
         members?: Array<{
           bot: {
             id: string
@@ -58,8 +66,8 @@ export interface ChatHeaderProps extends React.ComponentProps<"header"> {
 }
 
 /**
- * ChatHeader displays the bot avatar, chat/bot name, Daytona sandbox badge, and actions.
- * For group chats, it currently falls back to the first member's information.
+ * ChatHeader displays the bot or group avatar, title, and actions.
+ * Group chats use GroupChatAvatar and have the desktop panel option disabled.
  */
 export function ChatHeader({
   chat,
@@ -73,12 +81,19 @@ export function ChatHeader({
   const searchParams = useSearchParams()
   const [deleteOpen, setDeleteOpen] = React.useState(false)
 
+  const isGroup =
+    chat?.kind === "group" ||
+    (chat && "bots" in chat && Array.isArray(chat.bots) && chat.bots.length > 1) ||
+    (chat && "members" in chat && Array.isArray(chat.members) && chat.members.length > 1)
+
   const isDesktopOpen =
-    isDesktopOpenProp !== undefined
+    !isGroup &&
+    (isDesktopOpenProp !== undefined
       ? isDesktopOpenProp
-      : searchParams.get("desktop") === "true" || searchParams.get("desktop") === "open"
+      : searchParams.get("desktop") === "true" || searchParams.get("desktop") === "open")
 
   const handleToggleDesktop = () => {
+    if (isGroup) return
     if (onToggleDesktop) {
       onToggleDesktop()
       return
@@ -97,11 +112,17 @@ export function ChatHeader({
   const [isDeleting, setIsDeleting] = React.useState(false)
   const [deleteError, setDeleteError] = React.useState<string | null>(null)
 
-  // Ignore group chat for now, simply use the first chat member's information
   const members = chat && "members" in chat ? chat.members : undefined
+  const chatBots =
+    chat && "bots" in chat && Array.isArray(chat.bots) && chat.bots.length > 0
+      ? chat.bots
+      : members?.map((m) => m.bot).filter(Boolean) ?? []
+
   const firstMember = members?.[0]
   const bot = firstMember?.bot ?? chat?.bot ?? null
-  const botName = chat?.name || bot?.name || "Chat"
+  const botName = chat?.name || (isGroup ? "Group Chat" : (bot?.name || "Chat"))
+
+  const avatarSeeds = chatBots.map((b) => b.avatar || b.name)
   const avatarSeed = bot?.avatar || bot?.name || "Ada"
 
   const handleDeleteBot = async () => {
@@ -134,15 +155,23 @@ export function ChatHeader({
         {...props}
       >
         <div className="flex items-center gap-3 min-w-0">
-          <ChatAvatar
-            seed={avatarSeed}
-            alt={botName}
-            className="size-7 rounded-full shrink-0"
-          />
+          {isGroup && avatarSeeds.length > 1 ? (
+            <GroupChatAvatar
+              seeds={avatarSeeds}
+              sizeClassName="size-7"
+              className="rounded-full shrink-0"
+            />
+          ) : (
+            <ChatAvatar
+              seed={avatarSeed}
+              alt={botName}
+              className="size-7 rounded-full shrink-0"
+            />
+          )}
           <span className="truncate text-sm font-medium text-foreground">
             {botName}
           </span>
-          {bot?.sandboxId && (
+          {!isGroup && bot?.sandboxId && (
             <div
               className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-900/60 px-2 py-0.5 font-mono text-[11px] text-neutral-300"
               title={`Daytona Sandbox ID: ${bot.sandboxId}`}
@@ -155,32 +184,34 @@ export function ChatHeader({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant={isDesktopOpen ? "secondary" : "ghost"}
-                  size="icon-sm"
-                  type="button"
-                  className={cn(
-                    "cursor-pointer",
-                    isDesktopOpen
-                      ? "text-foreground bg-accent"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                  aria-label="Desktop"
-                  onClick={handleToggleDesktop}
-                >
-                  <Monitor className="size-4" />
-                </Button>
-              }
-            />
-            <TooltipContent side="bottom" align="end">
-              {isDesktopOpen ? "Close desktop" : "Desktop"}
-            </TooltipContent>
-          </Tooltip>
+          {!isGroup && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant={isDesktopOpen ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    type="button"
+                    className={cn(
+                      "cursor-pointer",
+                      isDesktopOpen
+                        ? "text-foreground bg-accent"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                    aria-label="Desktop"
+                    onClick={handleToggleDesktop}
+                  >
+                    <Monitor className="size-4" />
+                  </Button>
+                }
+              />
+              <TooltipContent side="bottom" align="end">
+                {isDesktopOpen ? "Close desktop" : "Desktop"}
+              </TooltipContent>
+            </Tooltip>
+          )}
 
-          {bot?.id && (
+          {!isGroup && bot?.id && (
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -209,7 +240,7 @@ export function ChatHeader({
         </div>
       </header>
 
-      {bot && (
+      {!isGroup && bot && (
         <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
           <DialogContent className="max-w-[400px]">
             <DialogHeader>
@@ -261,4 +292,3 @@ export function ChatHeader({
 }
 
 export default ChatHeader
-

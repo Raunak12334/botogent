@@ -9,6 +9,7 @@ import { formatDistanceToNowStrict } from "date-fns"
 
 import { Button } from "@/components/ui/button"
 import { ChatAvatar } from "@/components/chat-avatar"
+import { GroupChatAvatar } from "@/components/group-chat-avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +27,7 @@ import {
 } from "@/components/ui/command"
 import { Kbd } from "@/components/ui/kbd"
 import { BotDialog } from "@/components/bot-dialog"
+import { GroupChatDialog } from "@/components/group-chat-dialog"
 import {
   Sidebar,
   SidebarContent,
@@ -45,6 +47,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { UserChat } from "@/queries/bots"
+import type { Bot } from "@/lib/db/schema"
 
 function formatChatTime(date: Date | string | null | undefined): string {
   if (!date) return ""
@@ -55,17 +58,37 @@ function formatChatTime(date: Date | string | null | undefined): string {
   }
 }
 
+/** Renders either a single ChatAvatar or a GroupChatAvatar depending on chat kind */
+function ChatListAvatar({ chat }: { chat: UserChat }) {
+  if (chat.kind === "group" && chat.bots.length > 1) {
+    const seeds = chat.bots.map((b) => b.avatar || b.name)
+    return (
+      <GroupChatAvatar
+        seeds={seeds}
+        sizeClassName="size-8"
+        className="rounded-full"
+      />
+    )
+  }
+
+  const bot = chat.bot
+  const avatarSeed = bot?.avatar || bot?.name || "Ada"
+  return <ChatAvatar seed={avatarSeed} className="size-8 rounded-full" />
+}
+
 export interface AppSidebarProps
   extends React.ComponentProps<typeof Sidebar> {
   chats?: UserChat[]
+  bots?: Bot[]
 }
 
-export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
+export function AppSidebar({ chats = [], bots = [], ...props }: AppSidebarProps) {
   const router = useRouter()
   const pathname = usePathname()
   const params = useParams()
   const { state, isMobile, setOpenMobile } = useSidebar()
   const [botDialogOpen, setBotDialogOpen] = React.useState(false)
+  const [groupDialogOpen, setGroupDialogOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
 
   const activeChatId =
@@ -142,7 +165,10 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
                     <Plus className="size-4" />
                     <span>Create new bot</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem className="cursor-pointer gap-2">
+                  <DropdownMenuItem
+                    className="cursor-pointer gap-2"
+                    onClick={() => setGroupDialogOpen(true)}
+                  >
                     <Users className="size-4" />
                     <span>Create group chat</span>
                   </DropdownMenuItem>
@@ -182,9 +208,7 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
             <SidebarGroupContent>
               <SidebarMenu>
                 {chats.map((chat) => {
-                  const bot = chat.bot
-                  const name = chat.name || bot?.name || "Chat"
-                  const avatarSeed = bot?.avatar || bot?.name || "Ada"
+                  const name = chat.name || chat.bot?.name || "Chat"
                   const timeAgo = formatChatTime(
                     chat.lastMessageAt || chat.createdAt
                   )
@@ -205,10 +229,7 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
                         aria-current={isActive ? "page" : undefined}
                         onClick={() => handleChatSelect(chat.id)}
                       >
-                        <ChatAvatar
-                          seed={avatarSeed}
-                          className="size-8 rounded-full"
-                        />
+                        <ChatListAvatar chat={chat} />
                         <div className="flex flex-1 flex-col min-w-0 text-left group-data-[collapsible=icon]:hidden">
                           <div className="flex items-center justify-between gap-1">
                             <span className="truncate text-sm font-medium text-sidebar-foreground">
@@ -280,9 +301,7 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
           <CommandEmpty>No chats found.</CommandEmpty>
           <CommandGroup heading="Chats">
             {chats.map((chat) => {
-              const bot = chat.bot
-              const name = chat.name || bot?.name || "Chat"
-              const avatarSeed = bot?.avatar || bot?.name || "Ada"
+              const name = chat.name || chat.bot?.name || "Chat"
               const timeAgo = formatChatTime(
                 chat.lastMessageAt || chat.createdAt
               )
@@ -297,10 +316,7 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
                   }}
                   className="cursor-pointer gap-3 py-2"
                 >
-                  <ChatAvatar
-                    seed={avatarSeed}
-                    className="size-8 rounded-full"
-                  />
+                  <ChatListAvatar chat={chat} />
                   <div className="flex flex-1 flex-col min-w-0 text-left">
                     <div className="flex items-center justify-between gap-1">
                       <span className="truncate font-medium text-foreground">
@@ -329,6 +345,18 @@ export function AppSidebar({ chats = [], ...props }: AppSidebarProps) {
       <BotDialog
         open={botDialogOpen}
         onOpenChange={setBotDialogOpen}
+        onSuccess={(data) => {
+          router.refresh()
+          if (data?.chat?.id) {
+            handleChatSelect(data.chat.id)
+          }
+        }}
+      />
+
+      <GroupChatDialog
+        open={groupDialogOpen}
+        onOpenChange={setGroupDialogOpen}
+        bots={bots}
         onSuccess={(data) => {
           router.refresh()
           if (data?.chat?.id) {

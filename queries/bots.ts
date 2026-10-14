@@ -5,12 +5,14 @@ import { bots, chats, type Bot, type Chat } from '@/lib/db/schema';
 
 export type UserChat = Chat & {
   bot: Bot | null;
+  /** All member bots for the chat (populated for both direct and group) */
+  bots: Bot[];
 };
 
 /**
  * Retrieves the chats for the currently authenticated Clerk user,
  * ordered by most recent activity.
- * Ignores group chat kind for now and falls back to the first bot member.
+ * Returns all member bots for group chats.
  */
 export async function getUserChats(): Promise<UserChat[]> {
   const { userId } = await auth();
@@ -32,8 +34,10 @@ export async function getUserChats(): Promise<UserChat[]> {
   });
 
   return userChats.map((chat) => {
-    // Ignore group chat kind for now, fall back to first bot
-    const firstBot = chat.members[0]?.bot ?? null;
+    const memberBots = chat.members
+      .map((m) => m.bot)
+      .filter((b): b is Bot => b != null);
+    const firstBot = memberBots[0] ?? null;
 
     return {
       id: chat.id,
@@ -44,6 +48,7 @@ export async function getUserChats(): Promise<UserChat[]> {
       lastMessageAt: chat.lastMessageAt,
       createdAt: chat.createdAt,
       bot: firstBot,
+      bots: memberBots,
     };
   });
 }
