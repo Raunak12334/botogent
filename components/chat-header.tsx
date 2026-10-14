@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Box, Monitor, MoreVertical, Trash2, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -53,15 +53,47 @@ export interface ChatHeaderProps extends React.ComponentProps<"header"> {
         }>
       }
     | null
+  isDesktopOpen?: boolean
+  onToggleDesktop?: () => void
 }
 
 /**
  * ChatHeader displays the bot avatar, chat/bot name, Daytona sandbox badge, and actions.
  * For group chats, it currently falls back to the first member's information.
  */
-export function ChatHeader({ chat, className, ...props }: ChatHeaderProps) {
+export function ChatHeader({
+  chat,
+  className,
+  isDesktopOpen: isDesktopOpenProp,
+  onToggleDesktop,
+  ...props
+}: ChatHeaderProps) {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const [deleteOpen, setDeleteOpen] = React.useState(false)
+
+  const isDesktopOpen =
+    isDesktopOpenProp !== undefined
+      ? isDesktopOpenProp
+      : searchParams.get("desktop") === "true" || searchParams.get("desktop") === "open"
+
+  const handleToggleDesktop = () => {
+    if (onToggleDesktop) {
+      onToggleDesktop()
+      return
+    }
+
+    const params = new URLSearchParams(searchParams.toString())
+    if (isDesktopOpen) {
+      params.delete("desktop")
+    } else {
+      params.set("desktop", "true")
+    }
+
+    const query = params.toString()
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
+  }
   const [isDeleting, setIsDeleting] = React.useState(false)
   const [deleteError, setDeleteError] = React.useState<string | null>(null)
 
@@ -127,18 +159,24 @@ export function ChatHeader({ chat, className, ...props }: ChatHeaderProps) {
             <TooltipTrigger
               render={
                 <Button
-                  variant="ghost"
+                  variant={isDesktopOpen ? "secondary" : "ghost"}
                   size="icon-sm"
                   type="button"
-                  className="text-muted-foreground hover:text-foreground cursor-pointer"
+                  className={cn(
+                    "cursor-pointer",
+                    isDesktopOpen
+                      ? "text-foreground bg-accent"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
                   aria-label="Desktop"
+                  onClick={handleToggleDesktop}
                 >
                   <Monitor className="size-4" />
                 </Button>
               }
             />
             <TooltipContent side="bottom" align="end">
-              Desktop
+              {isDesktopOpen ? "Close desktop" : "Desktop"}
             </TooltipContent>
           </Tooltip>
 

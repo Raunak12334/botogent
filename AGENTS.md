@@ -86,4 +86,8 @@ Dart or C# API attributed to DiceBear is invented rather than outdated.
 ## Trigger.dev agent skills
 
 This project has Trigger.dev agent skills installed in `.agents/skills/`. Before writing or changing Trigger.dev code (background tasks, scheduled tasks, realtime, or chat.agent AI agents), load the most relevant skill: `trigger-authoring-chat-agent`.
+
+### Environment Variables & Deployment
+- **`TRIGGER_SECRET_KEY`**: The Trigger secret key for deployment is different because it requires a dedicated key for deployment/production (e.g., `tr_prod_sk_...`) compared to local development (`tr_dev_sk_...` in `.env.local`). Never overwrite or sync the deployment `TRIGGER_SECRET_KEY` on Railway with the local `.env.local` dev key.
 <!-- TRIGGER.DEV SKILLS END -->
+
