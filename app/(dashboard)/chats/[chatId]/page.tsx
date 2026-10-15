@@ -2,6 +2,7 @@ import { notFound } from "next/navigation"
 import { auth } from "@clerk/nextjs/server"
 
 import { getChat } from "@/queries/chats"
+import { getUserBots } from "@/queries/bots"
 import { ChatHeader } from "@/components/chat-header"
 import { ChatInterface } from "@/components/chat-interface"
 import { SandboxVncPreview } from "@/components/sandbox-vnc-preview"
@@ -28,7 +29,10 @@ export default async function ChatPage({
   await auth.protect()
 
   const { chatId } = await params
-  const chat = await getChat(chatId)
+  const [chat, allBots] = await Promise.all([
+    getChat(chatId),
+    getUserBots(),
+  ])
 
   if (!chat) {
     notFound()
@@ -47,7 +51,7 @@ export default async function ChatPage({
       <ResizablePanelGroup orientation="horizontal" className="h-full w-full">
         <ResizablePanel defaultSize={isDesktopOpen ? 65 : 100} minSize={30}>
           <div className="flex h-full flex-col min-h-0 overflow-hidden">
-            <ChatHeader chat={chat} isDesktopOpen={isDesktopOpen} />
+            <ChatHeader chat={chat} allBots={allBots} isDesktopOpen={isDesktopOpen} />
             <ChatInterface chat={chat} />
           </div>
         </ResizablePanel>

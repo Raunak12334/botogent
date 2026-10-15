@@ -38,6 +38,23 @@ export async function createBotSandbox(params: CreateBotSandboxParams): Promise<
     },
   });
 
+  // Create a blank memory.md file in bot's sandbox on creation
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await sandbox.fs.uploadFile(Buffer.from(''), 'memory.md');
+      break;
+    } catch (fsErr) {
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      } else {
+        console.warn(
+          `[Daytona] Warning creating blank memory.md for sandbox ${sandbox.id}:`,
+          fsErr instanceof Error ? fsErr.message : fsErr
+        );
+      }
+    }
+  }
+
   return sandbox;
 }
 

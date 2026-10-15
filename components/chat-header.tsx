@@ -2,11 +2,12 @@
 
 import * as React from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { Box, Monitor, MoreVertical, Trash2, Loader2 } from "lucide-react"
+import { Box, Monitor, MoreVertical, Trash2, Loader2, Pencil, Settings } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ChatAvatar } from "@/components/chat-avatar"
 import { GroupChatAvatar } from "@/components/group-chat-avatar"
+import { EditGroupChatDialog } from "@/components/edit-group-chat-dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +31,7 @@ import { deleteBot } from "@/actions/bot"
 import { cn } from "@/lib/utils"
 import type { ChatWithMembers } from "@/queries/chats"
 import type { UserChat } from "@/queries/bots"
+import type { Bot } from "@/lib/db/schema"
 
 export interface ChatHeaderProps extends React.ComponentProps<"header"> {
   chat?:
@@ -50,6 +52,7 @@ export interface ChatHeaderProps extends React.ComponentProps<"header"> {
           name: string
           avatar?: string | null
           sandboxId?: string | null
+          job?: string | null
         }>
         members?: Array<{
           bot: {
@@ -57,20 +60,24 @@ export interface ChatHeaderProps extends React.ComponentProps<"header"> {
             name: string
             avatar?: string | null
             sandboxId?: string | null
+            job?: string | null
           }
         }>
       }
     | null
+  allBots?: Bot[]
   isDesktopOpen?: boolean
   onToggleDesktop?: () => void
 }
 
 /**
  * ChatHeader displays the bot or group avatar, title, and actions.
- * Group chats use GroupChatAvatar and have the desktop panel option disabled.
+ * Group chats use GroupChatAvatar, have an interactive header to open edit settings,
+ * and have the desktop panel option disabled.
  */
 export function ChatHeader({
   chat,
+  allBots = [],
   className,
   isDesktopOpen: isDesktopOpenProp,
   onToggleDesktop,
@@ -80,6 +87,7 @@ export function ChatHeader({
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [editGroupOpen, setEditGroupOpen] = React.useState(false)
 
   const isGroup =
     chat?.kind === "group" ||
@@ -154,34 +162,61 @@ export function ChatHeader({
         )}
         {...props}
       >
-        <div className="flex items-center gap-3 min-w-0">
-          {isGroup && avatarSeeds.length > 1 ? (
-            <GroupChatAvatar
-              seeds={avatarSeeds}
-              sizeClassName="size-7"
-              className="rounded-full shrink-0"
-            />
-          ) : (
+        {isGroup ? (
+          <button
+            type="button"
+            onClick={() => setEditGroupOpen(true)}
+            className="group/header-btn flex items-center gap-2.5 min-w-0 rounded-lg p-1.5 -ml-1.5 text-left transition-colors hover:bg-accent/60 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            title="Edit group chat settings (change name, members, delete)"
+            aria-label="Edit group chat settings"
+          >
+            {avatarSeeds.length > 1 ? (
+              <GroupChatAvatar
+                seeds={avatarSeeds}
+                sizeClassName="size-7"
+                className="rounded-full shrink-0"
+              />
+            ) : (
+              <ChatAvatar
+                seed={avatarSeed}
+                alt={botName}
+                className="size-7 rounded-full shrink-0"
+              />
+            )}
+            <div className="flex flex-col min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-sm font-semibold text-foreground group-hover/header-btn:text-primary transition-colors">
+                  {botName}
+                </span>
+                <Pencil className="size-3 text-muted-foreground/60 opacity-0 group-hover/header-btn:opacity-100 transition-opacity" />
+              </div>
+              <span className="text-[11px] text-muted-foreground truncate">
+                {chatBots.length} bots • Click to edit
+              </span>
+            </div>
+          </button>
+        ) : (
+          <div className="flex items-center gap-3 min-w-0">
             <ChatAvatar
               seed={avatarSeed}
               alt={botName}
               className="size-7 rounded-full shrink-0"
             />
-          )}
-          <span className="truncate text-sm font-medium text-foreground">
-            {botName}
-          </span>
-          {!isGroup && bot?.sandboxId && (
-            <div
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-900/60 px-2 py-0.5 font-mono text-[11px] text-neutral-300"
-              title={`Daytona Sandbox ID: ${bot.sandboxId}`}
-            >
-              <Box className="size-3 text-emerald-400 shrink-0" />
-              <span className="text-neutral-400">Sandbox:</span>
-              <span className="truncate max-w-[100px]">{bot.sandboxId.slice(0, 8)}...</span>
-            </div>
-          )}
-        </div>
+            <span className="truncate text-sm font-medium text-foreground">
+              {botName}
+            </span>
+            {bot?.sandboxId && (
+              <div
+                className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-900/60 px-2 py-0.5 font-mono text-[11px] text-neutral-300"
+                title={`Daytona Sandbox ID: ${bot.sandboxId}`}
+              >
+                <Box className="size-3 text-emerald-400 shrink-0" />
+                <span className="text-neutral-400">Sandbox:</span>
+                <span className="truncate max-w-[100px]">{bot.sandboxId.slice(0, 8)}...</span>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center gap-1 shrink-0">
           {!isGroup && (
@@ -209,6 +244,40 @@ export function ChatHeader({
                 {isDesktopOpen ? "Close desktop" : "Desktop"}
               </TooltipContent>
             </Tooltip>
+          )}
+
+          {isGroup && chat?.id && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground cursor-pointer"
+                    aria-label="Group options"
+                  >
+                    <MoreVertical className="size-4" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem
+                  className="cursor-pointer gap-2"
+                  onClick={() => setEditGroupOpen(true)}
+                >
+                  <Settings className="size-4" />
+                  <span>Edit group</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer gap-2 text-destructive focus:text-destructive"
+                  onClick={() => setEditGroupOpen(true)}
+                >
+                  <Trash2 className="size-4" />
+                  <span>Delete group</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
 
           {!isGroup && bot?.id && (
@@ -239,6 +308,17 @@ export function ChatHeader({
           )}
         </div>
       </header>
+
+      {isGroup && chat?.id && (
+        <EditGroupChatDialog
+          open={editGroupOpen}
+          onOpenChange={setEditGroupOpen}
+          chatId={chat.id}
+          initialName={chat.name || "Group Chat"}
+          initialBotIds={chatBots.map((b) => b.id)}
+          allBots={allBots.length > 0 ? allBots : chatBots}
+        />
+      )}
 
       {!isGroup && bot && (
         <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

@@ -20,6 +20,21 @@ async function getSandbox(sandboxId: string) {
   const client = getDaytonaClient();
   const sandbox = await client.get(sandboxId);
   if (!sandbox) throw new Error(`Daytona sandbox ${sandboxId} not found`);
+
+  // Ensure the sandbox container itself is started and has an active IP
+  if (sandbox.state !== "started") {
+    try {
+      await sandbox.start();
+      // Allow time for the container to acquire an IP address and initialize
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    } catch (startErr) {
+      console.warn(
+        `[Daytona] Warning during sandbox.start for ${sandboxId}:`,
+        startErr instanceof Error ? startErr.message : startErr
+      );
+    }
+  }
+
   return sandbox;
 }
 
@@ -144,29 +159,63 @@ export function createSandboxTools(boundSandboxId?: string | null) {
   // -------------------------------------------------------------------------
   const readFile = tool({
     description:
-      "Read the contents of a file in the sandbox filesystem as a UTF-8 string.",
+      "Read the contents of a file in the sandbox filesystem as a UTF-8 string. " +
+      "Use this to inspect files or read 'memory.md' (your persistent long-term memory storing facts, user preferences, and history across 1-on-1 and group chats).",
     inputSchema: z.object({
-      path: z.string().describe("Absolute or relative path to the file"),
+      path: z.string().describe("Absolute or relative path to the file (e.g. 'memory.md')"),
       sandboxId: z.string().optional().describe("Optional sandbox ID override"),
     }),
     execute: async ({ path, sandboxId }) => {
       const sandbox = await resolveSandbox(sandboxId);
-      const bytes = await sandbox.fs.downloadFile(path);
-      return { content: bytes.toString("utf-8") };
+      try {
+        const bytes = await sandbox.fs.downloadFile(path);
+        return { content: bytes.toString("utf-8") };
+      } catch (err) {
+        // If memory.md does not exist yet (e.g. bot created before this update), initialize a blank memory.md
+        if (
+          path === "memory.md" ||
+          path === "/home/daytona/memory.md" ||
+          path.endsWith("/memory.md")
+        ) {
+          try {
+            await sandbox.fs.uploadFile(Buffer.from(""), "memory.md");
+            return { content: "" };
+          } catch (createErr) {
+            console.warn(
+              "[Daytona] Could not initialize fallback memory.md:",
+              createErr instanceof Error ? createErr.message : createErr
+            );
+            return { content: "" };
+          }
+        }
+        throw err;
+      }
     },
   });
 
   const writeFile = tool({
     description:
-      "Write text content to a file in the sandbox filesystem.",
+      "Write text content to a file in the sandbox filesystem. " +
+      "Use this to update files or persist notes to 'memory.md' (so facts and preferences learned in private 1-on-1 chats are remembered when asked in group chats).",
     inputSchema: z.object({
-      path: z.string().describe("Absolute or relative path to the file"),
+      path: z.string().describe("Absolute or relative path to the file (e.g. 'memory.md')"),
       content: z.string().describe("Text content to write"),
       sandboxId: z.string().optional().describe("Optional sandbox ID override"),
     }),
     execute: async ({ path, content, sandboxId }) => {
       const sandbox = await resolveSandbox(sandboxId);
-      await sandbox.fs.uploadFile(Buffer.from(content, "utf-8"), path);
+      try {
+        await sandbox.fs.uploadFile(Buffer.from(content, "utf-8"), path);
+      } catch (uploadErr) {
+        // If container needed extra time to resolve IP or start, retry once
+        if (sandbox.state !== "started") {
+          await sandbox.start();
+          await new Promise((r) => setTimeout(r, 2000));
+        } else {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        await sandbox.fs.uploadFile(Buffer.from(content, "utf-8"), path);
+      }
       return { success: true, path };
     },
   });

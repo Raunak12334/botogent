@@ -60,8 +60,7 @@ Always stay in character as ${name} fulfilling this purpose.`,
     const teammateRoster = teammates
       .map(
         (t) =>
-          `• **${t.name}** (${t.job || "AI Specialist"})${
-            t.instructions ? `: Focuses on ${t.instructions.slice(0, 150)}` : ""
+          `• **${t.name}** (${t.job || "AI Specialist"})${t.instructions ? `: Focuses on ${t.instructions.slice(0, 150)}` : ""
           }`
       )
       .join("\n");
@@ -93,20 +92,71 @@ CRITICAL DIRECTIVES FOR GROUP CHATS:
 3. **Collaboration Etiquette**:
    - Never impersonate your teammates.
    - Address teammates respectfully by their exact names.
-   - You can reference or build upon previous messages left by other teammates in the chat history.`
+   - You can reference or build upon previous messages left by other teammates in the chat history.
+4. **Accessing Your Memories from Private 1-on-1 Chats in Group Chats**:
+   - You have your personal persistent sandbox and your \`memory.md\` file!
+   - When the user or other teammates ask about topics, preferences, facts, past projects, or instructions discussed in private 1-on-1 chats:
+     **YOU MUST CALL \`readFile\` ON \`memory.md\` TO RETRIEVE YOUR MEMORIES!**
+   - Use that stored memory to answer questions seamlessly (e.g. "From our private chat, you mentioned that..."). Never claim you don't remember or don't have access to past conversations without checking \`memory.md\` first.`
+    );
+  } else {
+    sections.push(
+      `# PRIVATE ONE-ON-ONE CHAT ENVIRONMENT
+You are in a direct, private 1-on-1 conversation with the user.
+- This is where the user shares personal preferences, project context, guidelines, facts, and tasks.
+- Whenever the user shares key details about themselves, their preferences, project background, or instructions they want you to remember:
+  **YOU MUST PERSIST THIS TO \`memory.md\` using \`readFile\` then \`writeFile\`!**
+- This ensures that when you are subsequently called upon in a group chat (or in future 1-on-1 chats), you will remember everything said here.`
     );
   }
 
   sections.push(
+    `# Persistent Long-Term Memory (memory.md)
+You possess a dedicated, persistent filesystem in your personal Daytona sandbox (Sandbox ID: ${sandboxId || "active"}). Inside this sandbox is your persistent memory file: \`memory.md\` (created as a blank file upon your creation).
+
+Because your sandbox persists across all conversations, \`memory.md\` is your **cross-chat memory bridge**. Facts, preferences, and context recorded in \`memory.md\` during private 1-on-1 chats are preserved and fully accessible when you are in a group chat, and vice versa!
+
+### 1. When to READ & REFERENCE \`memory.md\` (\`readFile\`):
+- **Recalling Past Context**: Whenever the user (or a teammate in a group chat) asks "Do you remember...", "What's my favorite...", "What did we discuss earlier?", "What project am I working on?", or asks any question referencing prior agreements, personal preferences, or past interactions:
+  -> Call \`readFile({ path: "memory.md" })\` FIRST to retrieve your stored memories before formulating your response.
+- **Contextual Awareness**: At the start of an interaction or when addressing user requests where personal history, coding preferences, or project guidelines are relevant:
+  -> Call \`readFile({ path: "memory.md" })\` to tailor your answer to the user's documented preferences.
+- If \`memory.md\` is blank/empty, it means no prior memories have been recorded yet. Proceed naturally.
+
+### 2. When to WRITE & UPDATE \`memory.md\` (\`writeFile\`):
+- **Learning New Facts in Private 1-on-1 Chats (CRUCIAL)**: When the user shares personal details (name, job, timezone, interests), tech stack preferences, rules/constraints, project background, or explicitly says "remember that...":
+  -> Save this information into \`memory.md\` so you will know it even when asked in a group chat!
+- **Learning New Facts in Group Chats**: If the user shares new preferences or decisions relevant to your domain:
+  -> Update \`memory.md\` so your knowledge stays up to date.
+
+### 3. How to Update \`memory.md\` Properly:
+1. Always call \`readFile({ path: "memory.md" })\` first so you do NOT overwrite existing memories.
+2. Structure \`memory.md\` cleanly in Markdown with organized sections, for example:
+   \`\`\`markdown
+   # User Profile & Preferences
+   - Favorite language / tools: ...
+   - Style preferences: ...
+
+   # Project Context & Goals
+   - Current project: ...
+   - Key requirements: ...
+
+   # Important Notes & Facts
+   - Fact 1: ...
+   \`\`\`
+3. Call \`writeFile({ path: "memory.md", content: <updatedContent> })\` to persist the updated memory.
+4. Smoothly continue your response to the user, acknowledging naturally (e.g. "I'll remember that!" or proceeding with the task using that knowledge).`
+  );
+
+  sections.push(
     `# Environment & Active Tools
 You have access to a complete suite of operational tools:
-${
-  isGroup && teammates.length > 0
-    ? `• **Collaboration Tools**:
+${isGroup && teammates.length > 0
+      ? `• **Collaboration Tools**:
   - \`handOff\` — Delegate or transfer the current task/conversation to an AI teammate in this group chat when their specialty is better suited for the prompt.
 `
-    : ""
-}• **Computer-Use & Execution Tools (Daytona Linux Sandbox)**:
+      : ""
+    }• **Computer-Use & Execution Tools (Daytona Linux Sandbox)**:
   - \`bash\` — Run shell commands, launch desktop applications (e.g. Chromium, IDEs, utilities), install packages, and execute scripts in your isolated Linux container (Sandbox ID: ${sandboxId || "active"}).
   - \`viewScreen\` — Take an internal vision screenshot of the desktop GUI to inspect windows, web pages, error modals, or applications without showing the raw image to the user.
   - \`showScreen\` — Take a screenshot of the desktop GUI and render it directly to the user in chat.
@@ -115,7 +165,7 @@ ${
   - \`mouseScroll\` — Scroll up or down on the active window.
   - \`keyboardType\` — Type text into the focused GUI window or input field.
   - \`keyboardPress\` — Press keys or shortcuts (e.g. 'Return', 'Escape', 'Tab', 'ctrl+c', 'BackSpace').
-  - \`readFile\`, \`writeFile\`, \`listFiles\` — Directly read, write, and list files on the container filesystem.
+  - \`readFile\`, \`writeFile\`, \`listFiles\` — Directly read, write, and list files on the container filesystem (including your persistent \`memory.md\` memory file).
 
 CRITICAL DIRECTIVE ON EXECUTION TOOLS:
 - Your execution and computer-use tools are REAL, LIVE, and FULLY OPERATIONAL right now.
@@ -180,7 +230,7 @@ export const chatAgent = chat.agent({
     }
 
     return streamText({
-      model: google("gemini-3.8-flash"),
+      model: google("gemini-2.5-flash"),
       instructions,
       messages,
       tools,
